@@ -332,7 +332,7 @@
                     {% endif %}
                     {% if USE_MONITORING %}
                     <li role="separator" class="divider"></li>
-                    <li><a href="{% url "monitoring:index" %}">{% trans "Monitoring" %}</a></li>
+                    <li><a href="{% url "monitoring:index" %}">{% trans "Monitoring & Analytics" %}</a></li>
                     {% endif %}
                 {% endif %}
                 <li role="separator" class="divider"></li>
@@ -522,6 +522,9 @@
               <label class="checkbox">
                 <input type="checkbox" /> {% trans "Remember Me" %}
               </label>
+              <p>
+                <a href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
+              </p>
             </div>
             <div class="modal-footer">
               <button type="submit" class="btn btn-primary btn-block">{% trans "Sign in" %}</button>
@@ -569,6 +572,9 @@
                 $('#search_input').val($(choice[0]).text());
                 $('#search').submit();
             }
+        });
+        $(".datepicker").datepicker({
+            format: "yyyy-mm-dd"
         });
     </script>
     <script>

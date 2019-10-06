@@ -253,7 +253,6 @@ def get_sld_for(gs_catalog, layer):
         gs_layer = gs_catalog.get_layer(layer.name)
     except BaseException:
         traceback.print_exc()
-
     if _default_style is None:
         try:
             name = gs_layer.default_style.name if gs_layer.default_style is not None else "raster"
@@ -264,8 +263,8 @@ def get_sld_for(gs_catalog, layer):
         name = _default_style.name
 
     # Detect geometry type if it is a FeatureType
-    if gs_layer and gs_layer.resource and gs_layer.resource.resource_type == 'featureType':
-        res = gs_layer.resource
+    res = gs_layer.resource if gs_layer else None
+    if res and res.resource_type == 'featureType':
         res.fetch()
         ft = res.store.get_resources(name=res.name)
         ft.fetch()
@@ -558,12 +557,12 @@ def gs_slurp(
                     resources = cat.get_resources(stores=[store])
             else:
                 resources = cat.get_resources(workspaces=[workspace])
-
     elif store is not None:
         store = get_store(cat, store)
         resources = cat.get_resources(stores=[store])
     else:
         resources = cat.get_resources()
+
     if remove_deleted:
         resources_for_delete_compare = resources[:]
         workspace_for_delete_compare = workspace
@@ -580,7 +579,18 @@ def gs_slurp(
         resources = [k for k in resources if filter in k.name]
 
     # filter out layers depending on enabled, advertised status:
-    resources = [k for k in resources if k.enabled in ["true", True]]
+    _resources = []
+    for k in resources:
+        try:
+            if k.enabled in ["true", True]:
+                _resources.append(k)
+        except BaseException:
+            if ignore_errors:
+                continue
+            else:
+                raise
+    # resources = [k for k in resources if k.enabled in ["true", True]]
+    resources = _resources
     if skip_unadvertised:
         resources = [k for k in resources if k.advertised in ["true", True]]
 

@@ -37,6 +37,8 @@ Check that your system is already up-to-date with the repository running the fol
 Packages Installation
 .....................
 
+.. note:: You don't need to install the **system packages** if you want to run the project using Docker
+
 We will use **example.org** as fictitious Domain Name.
 
 First, we are going to install all the **system packages** needed for the GeoNode setup. Login to the target machine and execute the following commands:
@@ -102,7 +104,7 @@ Since geonode needs a large number of different python libraries and packages, i
 .. code-block:: shell
 
   # Create the GeoNode Virtual Environment (first time only)
-  mkvirtualenv --no-site-packages geonode
+  virtualenv geonode
 
 At this point your command prompt shows a ``(geonode)`` prefix, this indicates that your virtualenv is active.
 
@@ -302,9 +304,9 @@ We will also perform several optimizations to:
     OpenJDK 64-Bit Server VM (build 25.212-b03, mixed mode)
 
   # Install Apache Tomcat 8
-  sudo wget http://www-us.apache.org/dist/tomcat/tomcat-8/v8.5.41/bin/apache-tomcat-8.5.41.tar.gz
-  sudo tar xzf apache-tomcat-8.5.41.tar.gz
-  sudo mv apache-tomcat-8.5.41 /usr/local/apache-tomcat8
+  sudo wget http://www-us.apache.org/dist/tomcat/tomcat-8/v8.5.46/bin/apache-tomcat-8.5.46.tar.gz
+  sudo tar xzf apache-tomcat-8.5.46.tar.gz
+  sudo mv apache-tomcat-8.5.46 /usr/local/apache-tomcat8
   sudo useradd -m -U -s /bin/false tomcat
   sudo usermod -a -G www-data tomcat
   sudo sed -i -e 's/xom-\*\.jar/xom-\*\.jar,bcprov\*\.jar/g' /usr/local/apache-tomcat8/conf/catalina.properties

@@ -31,9 +31,10 @@ if check_ogc_backend(geoserver.BACKEND_PACKAGE):
 elif check_ogc_backend(qgis_server.BACKEND_PACKAGE):
     from geonode.qgis_server.gis_tools import set_attributes
 
-_names = ['Zipped', 'Shapefile', 'GML 2.0', 'GML 3.1.1', 'CSV', 'GeoJSON', 'Excel', 'Legend',
-          'GeoTIFF', 'GZIP', 'Original Dataset', 'ESRI Shapefile', 'View in Google Earth',
-          'KML', 'KMZ']
+_names = ['Zipped Shapefile', 'Zipped', 'Shapefile', 'GML 2.0', 'GML 3.1.1', 'CSV',
+          'GeoJSON', 'Excel', 'Legend', 'GeoTIFF', 'GZIP', 'Original Dataset',
+          'ESRI Shapefile', 'View in Google Earth', 'KML', 'KMZ', 'Atom', 'DIF',
+          'Dublin Core', 'ebRIM', 'FGDC', 'ISO', 'ISO with XSL']
 
 
 class Command(BaseCommand):
@@ -53,7 +54,7 @@ class Command(BaseCommand):
             '--remove-duplicates',
             action='store_true',
             dest='remove_duplicates',
-            default=True,
+            default=False,
             help='Remove duplicates first.'
         )
         parser.add_argument(
@@ -93,21 +94,20 @@ class Command(BaseCommand):
                 # refresh metadata links
                 set_resource_default_links(layer, layer, prune=False)
 
+                # refresh catalogue metadata records
+                catalogue_post_save(instance=layer, sender=layer.__class__)
+
                 if remove_duplicates:
                     # remove duplicates
                     for _n in _names:
-                        _links = Link.objects.filter(resource__id=layer.id, name__icontains=_n)
+                        _links = Link.objects.filter(resource__id=layer.id, name=_n)
                         while _links.count() > 1:
                             _links.last().delete()
                             print '.',
-
-                # refresh catalogue metadata records
-                catalogue_post_save(instance=layer, sender=layer.__class__)
             except BaseException as e:
-                # import traceback
-                # traceback.print_exc()
+                import traceback
+                traceback.print_exc()
                 if ignore_errors:
                     print "[ERROR] Layer [%s] couldn't be updated" % (layer.name)
                 else:
                     raise e
-
