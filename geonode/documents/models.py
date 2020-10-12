@@ -18,17 +18,17 @@
 #
 #########################################################################
 
-import logging
 import os
 import uuid
-from urlparse import urlparse
+import logging
+from urllib.parse import urlparse
 
 from django.db import models
 from django.db.models import signals
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.contrib.staticfiles import finders
 from django.utils.translation import ugettext_lazy as _
 
@@ -67,11 +67,18 @@ class Document(ResourceBase):
         help_text=_('The URL of the document if it is external.'),
         verbose_name=_('URL'))
 
-    def __unicode__(self):
-        return self.title
+    def __str__(self):
+        return "{0}".format(self.title)
 
     def get_absolute_url(self):
         return reverse('document_detail', args=(self.id,))
+
+    @property
+    def name(self):
+        if not self.title:
+            return str(self.id)
+        else:
+            return self.title
 
     @property
     def name_long(self):
@@ -102,10 +109,19 @@ class Document(ResourceBase):
 class DocumentResourceLink(models.Model):
 
     # relation to the document model
-    document = models.ForeignKey(Document, related_name='links')
+    document = models.ForeignKey(
+        Document,
+        null=True,
+        blank=True,
+        related_name='links',
+        on_delete=models.CASCADE)
 
     # relation to the resource model
-    content_type = models.ForeignKey(ContentType)
+    content_type = models.ForeignKey(
+        ContentType,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE)
     object_id = models.PositiveIntegerField()
     resource = GenericForeignKey('content_type', 'object_id')
 
@@ -126,7 +142,7 @@ def get_related_resources(document):
                 link.content_type.get_object_for_this_type(id=link.object_id)
                 for link in document.links.all()
             ]
-        except BaseException:
+        except Exception:
             return []
     else:
         return []
@@ -208,7 +224,9 @@ def post_save_document(instance, *args, **kwargs):
 def create_thumbnail(sender, instance, created, **kwargs):
     from .tasks import create_document_thumbnail
 
-    create_document_thumbnail.delay(object_id=instance.id)
+    result = create_document_thumbnail.delay(object_id=instance.id)
+    # Attempt to run task synchronously
+    result.get()
 
 
 def update_documents_extent(sender, **kwargs):

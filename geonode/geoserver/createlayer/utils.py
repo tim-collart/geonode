@@ -23,16 +23,16 @@ import uuid
 import logging
 import json
 
+from django.contrib.auth import get_user_model
 from django.template.defaultfilters import slugify
-
-from geoserver.catalog import Catalog
-from geoserver.catalog import FailedRequestError
 
 from geonode import GeoNodeException
 from geonode.layers.models import Layer
 from geonode.layers.utils import get_valid_name
-from geonode.people.models import Profile
-from geonode.geoserver.helpers import ogc_server_settings
+from geonode.geoserver.helpers import (
+    gs_catalog,
+    ogc_server_settings,
+    create_geoserver_db_featurestore)
 
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def create_gn_layer(workspace, datastore, name, title, owner_name):
     """
     Associate a layer in GeoNode for a given layer in GeoServer.
     """
-    owner = Profile.objects.get(username=owner_name)
+    owner = get_user_model().objects.get(username=owner_name)
 
     layer = Layer.objects.create(
         name=name,
@@ -143,42 +143,8 @@ def get_or_create_datastore(cat, workspace=None, charset="UTF-8"):
     """
     Get a PostGIS database store or create it in GeoServer if does not exist.
     """
-
-    # TODO refactor this and geoserver.helpers._create_db_featurestore
-    # dsname = ogc_server_settings.DATASTORE
     dsname = ogc_server_settings.datastore_db['NAME']
-    if not ogc_server_settings.DATASTORE:
-        msg = ("To use the createlayer application you must set ogc_server_settings.datastore_db['ENGINE']"
-               " to 'django.contrib.gis.db.backends.postgis")
-        logger.error(msg)
-        raise GeoNodeException(msg)
-
-    try:
-        ds = cat.get_store(dsname, workspace=workspace)
-    except FailedRequestError:
-        ds = cat.create_datastore(dsname, workspace=workspace)
-
-    db = ogc_server_settings.datastore_db
-    ds.connection_parameters.update(
-        {'validate connections': 'true',
-         'max connections': '10',
-         'min connections': '1',
-         'fetch size': '1000',
-         'host': db['HOST'],
-         'port': db['PORT'] if isinstance(
-             db['PORT'], basestring) else str(db['PORT']) or '5432',
-         'database': db['NAME'],
-         'user': db['USER'],
-         'passwd': db['PASSWORD'],
-         'dbtype': 'postgis'}
-    )
-
-    cat.save(ds)
-
-    # we need to reload the ds as gsconfig-1.0.6 apparently does not populate ds.type
-    # using create_datastore (TODO fix this in gsconfig)
-    ds = cat.get_store(dsname, workspace=workspace)
-
+    ds = create_geoserver_db_featurestore(store_name=dsname, workspace=workspace)
     return ds
 
 
@@ -189,9 +155,7 @@ def create_gs_layer(name, title, geometry_type, attributes=None):
     """
 
     native_name = name
-    gs_user = ogc_server_settings.credentials[0]
-    gs_password = ogc_server_settings.credentials[1]
-    cat = Catalog(ogc_server_settings.internal_rest, gs_user, gs_password)
+    cat = gs_catalog
 
     # get workspace and store
     workspace = cat.get_default_workspace()
@@ -235,18 +199,19 @@ def create_gs_layer(name, title, geometry_type, attributes=None):
            "<crs>EPSG:4326</crs></latLonBoundingBox>"
            "{attributes}"
            "</featureType>").format(
-        name=name.encode('UTF-8', 'strict'), native_name=native_name.encode('UTF-8', 'strict'),
-        title=title.encode('UTF-8', 'strict'),
+        name=name, native_name=native_name,
+        title=title,
         minx=BBOX[0], maxx=BBOX[1], miny=BBOX[2], maxy=BBOX[3],
         attributes=attributes_block)
 
     url = ('%s/workspaces/%s/datastores/%s/featuretypes'
-           % (ogc_server_settings.internal_rest, workspace.name, datastore.name))
+           % (ogc_server_settings.rest, workspace.name, datastore.name))
     headers = {'Content-Type': 'application/xml'}
-    req = requests.post(url, data=xml, headers=headers, auth=(gs_user, gs_password))
+    _user, _password = ogc_server_settings.credentials
+    req = requests.post(url, data=xml, headers=headers, auth=(_user, _password))
     if req.status_code != 201:
         logger.error('Request status code was: %s' % req.status_code)
         logger.error('Response was: %s' % req.text)
-        raise GeoNodeException("Layer could not be created in GeoServer")
+        raise Exception("Layer could not be created in GeoServer {}".format(req.text))
 
     return workspace, datastore

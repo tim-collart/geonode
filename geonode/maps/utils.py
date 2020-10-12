@@ -48,7 +48,7 @@ def _layer_json(layers, sources):
                 results.append(x)
         return results
 
-    configs = [l.source_config() for l in layers]
+    configs = [lyr.source_config() for lyr in layers]
 
     i = 0
     for source in uniqify(configs):
@@ -58,20 +58,20 @@ def _layer_json(layers, sources):
         server_lookup[json.dumps(source)] = str(i)
 
     def source_lookup(source):
-        for k, v in sources.iteritems():
+        for k, v in sources.items():
             if v == source:
                 return k
         return None
 
-    def layer_config(l, user=None):
-        cfg = l.layer_config(user=user)
-        src_cfg = l.source_config()
+    def layer_config(lyr, user=None):
+        cfg = lyr.layer_config(user=user)
+        src_cfg = lyr.source_config()
         source = source_lookup(src_cfg)
         if source:
             cfg["source"] = source
         return cfg
 
-    return [layer_config(l, user=None) for l in layers]
+    return [layer_config(lyr, user=None) for lyr in layers]
 
 
 def fix_baselayers(map_id):

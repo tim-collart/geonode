@@ -21,13 +21,14 @@
 import logging
 import pytz
 import hashlib
-import types
+from six import string_types
 
 from datetime import datetime
 from django.conf import settings
 from geonode.monitoring.models import Service, Host
 from geonode.monitoring.utils import MonitoringHandler
 from django.http import HttpResponse
+from django.utils.deprecation import MiddlewareMixin
 
 
 FILTER_URLS = (settings.MEDIA_URL,
@@ -35,15 +36,15 @@ FILTER_URLS = (settings.MEDIA_URL,
                '/gs/',
                '/api/',
                '/security/',
-               '/lang.js',
                '/jsi18n/',
                '/h_keywords_api',
                '/admin/jsi18n/',)
 
 
-class MonitoringMiddleware(object):
+class MonitoringMiddleware(MiddlewareMixin):
 
-    def __init__(self):
+    def __init__(self, get_response):
+        self.get_response = get_response
         self.setup_logging()
 
     def setup_logging(self):
@@ -75,7 +76,7 @@ class MonitoringMiddleware(object):
         current = request.path
 
         for skip_url in settings.MONITORING_SKIP_PATHS:
-            if isinstance(skip_url, types.StringTypes):
+            if isinstance(skip_url, string_types):
                 if current.startswith(skip_url):
                     return False
             elif hasattr(skip_url, 'match'):
@@ -123,9 +124,10 @@ class MonitoringMiddleware(object):
                 }
 
         if settings.USER_ANALYTICS_ENABLED:
+            _session_key = request.session.session_key.encode() if request.session.session_key else ''
             meta.update({
-                'user_identifier': hashlib.sha256(request.session.session_key or '').hexdigest(),
-                'user_username': request.user.username if request.user.is_authenticated() else 'AnonymousUser'
+                'user_identifier': hashlib.sha256(_session_key).hexdigest(),
+                'user_username': request.user.username if request.user.is_authenticated else 'AnonymousUser'
             })
 
         request._monitoring = meta

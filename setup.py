@@ -17,43 +17,23 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 #########################################################################
+from setuptools import setup
 
-try:  # for pip >= 10
-    from pip._internal.req import parse_requirements
-    from pip._internal.download import PipSession
-except ImportError:  # for pip <= 9.0.3
-    from pip.req import parse_requirements
-    from pip.download import PipSession
-from distutils.core import setup
+import os
+import sys
 
-from setuptools import find_packages
+current_directory = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_directory)
 
-# Parse requirements.txt to get the list of dependencies
-inst_req = parse_requirements('requirements.txt',
-                              session=PipSession())
-REQUIREMENTS = [str(r.req) for r in inst_req]
 
-setup(name='GeoNode',
-      version=__import__('geonode').get_version(),
-      description="Application for serving and sharing geospatial data",
-      long_description=open('README.md').read(),
-      classifiers=[
-          "Development Status :: 4 - Beta"],
-      python_requires='>=2.7, <3',
-      keywords='',
-      author='GeoNode Developers',
-      author_email='dev@geonode.org',
-      url='http://geonode.org',
-      license='GPL',
-      packages=find_packages(),
-      package_data={
-          '': ['*.*'], # noqa
-          '': ['static/*.*'], # noqa
-          'static': ['*.*'],
-          '': ['templates/*.*'], # noqa
-          'templates': ['*.*'],
-      },
-      include_package_data=True,
-      install_requires=REQUIREMENTS,
-      zip_safe=False
-      )
+setup(
+    version=__import__("geonode").get_version(),
+    long_description=open("README.md").read(),
+    package_data={
+        "": ["*.*"],  # noqa
+        "": ["static/*.*"],  # noqa
+        "static": ["*.*"],
+        "": ["templates/*.*"],  # noqa
+        "templates": ["*.*"],
+    }
+)

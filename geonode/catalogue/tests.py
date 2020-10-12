@@ -17,12 +17,7 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 #########################################################################
-
 from geonode.tests.base import GeoNodeBaseTestSupport
-
-import json
-from django.core.urlresolvers import reverse
-from geonode.base.models import ResourceBase
 from geonode.catalogue import get_catalogue
 
 
@@ -34,32 +29,5 @@ class CatalogueTest(GeoNodeBaseTestSupport):
     def test_get_catalog(self):
         """Tests the get_catalogue function works."""
 
-        c = get_catalogue()  # noqa
-
-    def test_data_json(self):
-        """Test that the data.json representation behaves correctly"""
-
-        response = self.client.get(reverse('data_json')).content
-        data_json = json.loads(response)
-
-        len1 = len(ResourceBase.objects.all())
-        len2 = len(data_json)
-        self.assertEquals(len1, len2,
-                          'Expected equality of json and repository lengths')
-
-        record_keys = [
-            u'publisher',
-            u'identifier',
-            u'description',
-            u'keyword',
-            u'title',
-            u'modified',
-            u'contactPoint',
-            u'accessLevel',
-            u'mbox',
-            u'distribution'
-        ]
-
-        for record in data_json:
-            self.assertEquals(record_keys, record.keys(),
-                              'Expected specific list of fields to output')
+        c = get_catalogue()
+        self.assertIsNotNone(c)

@@ -20,6 +20,7 @@
 from geonode.tests.base import GeoNodeBaseTestSupport
 
 import os
+import re
 import gisdata
 
 from geonode import geoserver
@@ -28,6 +29,8 @@ from geonode.decorators import on_ogc_backend
 from geonode.layers.models import Layer
 from geonode.layers.utils import file_upload
 from geonode.layers.populate_layers_data import create_layer_data
+
+from geonode.geoserver.views import _response_callback
 
 import logging
 logger = logging.getLogger(__name__)
@@ -52,33 +55,139 @@ class HelperTest(GeoNodeBaseTestSupport):
         logger.debug(Layer.objects.all())
         self.assertIsNotNone(layer)
 
-        logger.info("Attempting to replace a vector layer with a raster.")
+        logger.debug("Attempting to replace a vector layer with a raster.")
         filename = filename = os.path.join(
             gisdata.GOOD_DATA,
             'vector/san_andres_y_providencia_administrative.shp')
         vector_layer = file_upload(filename)
         self.assertTrue(vector_layer.is_vector())
         filename = os.path.join(gisdata.GOOD_DATA, 'raster/test_grid.tif')
-        with self.\
-        assertRaisesRegexp(Exception, "You are attempting to replace a vector layer with a raster."):
+        with self.assertRaisesRegex(Exception, "You are attempting to replace a vector layer with a raster."):
             file_upload(filename, layer=vector_layer, overwrite=True)
 
-        logger.info("Attempting to replace a raster layer with a vector.")
+        logger.debug("Attempting to replace a raster layer with a vector.")
         raster_layer = file_upload(filename)
         self.assertFalse(raster_layer.is_vector())
         filename = filename = os.path.join(
             gisdata.GOOD_DATA,
             'vector/san_andres_y_providencia_administrative.shp')
-        with self.\
-        assertRaisesRegexp(Exception, "You are attempting to replace a raster layer with a vector."):
+        with self.assertRaisesRegex(Exception, "You are attempting to replace a raster layer with a vector."):
             file_upload(filename, layer=raster_layer, overwrite=True)
 
-        logger.info("Attempting to replace a layer with no geometry type.")
-        with self.\
-        assertRaisesRegexp(Exception, "Local GeoNode layer has no geometry type."):
+        logger.debug("Attempting to replace a layer with no geometry type.")
+        with self.assertRaisesRegex(Exception, "Local GeoNode layer has no geometry type."):
             replaced = file_upload(filename, layer=vector_layer, overwrite=True)
 
-        logger.info("Attempting to replace a vector layer.")
+        logger.debug("Attempting to replace a vector layer.")
         replaced = file_upload(filename, layer=vector_layer, overwrite=True, gtype='LineString')
         self.assertIsNotNone(replaced)
         self.assertTrue(replaced.is_vector())
+
+    @on_ogc_backend(geoserver.BACKEND_PACKAGE)
+    def test_replace_callback(self):
+        content = """<Layer>
+      <Title>GeoNode Local GeoServer</Title>
+      <Abstract>This is a description of your Web Map Server.</Abstract>
+      <!--Limited list of EPSG projections:-->
+      <CRS>EPSG:4326</CRS>
+      <CRS>EPSG:3785</CRS>
+      <CRS>EPSG:3857</CRS>
+      <CRS>EPSG:900913</CRS>
+      <CRS>EPSG:32647</CRS>
+      <CRS>EPSG:32736</CRS>
+      <CRS>CRS:84</CRS>
+      <EX_GeographicBoundingBox>
+        <westBoundLongitude>-124.731422</westBoundLongitude>
+        <eastBoundLongitude>12.512771464573753</eastBoundLongitude>
+        <southBoundLatitude>12.4801497</southBoundLatitude>
+        <northBoundLatitude>49.371735</northBoundLatitude>
+      </EX_GeographicBoundingBox>
+      <BoundingBox CRS="CRS:84" ..../>
+      <BoundingBox CRS="EPSG:4326" ..../>
+      <BoundingBox CRS="EPSG:3785" ..../>
+      <BoundingBox CRS="EPSG:3857" ..../>
+      <BoundingBox CRS="EPSG:900913" ..../>
+      <BoundingBox CRS="EPSG:32647" ..../>
+      <BoundingBox CRS="EPSG:32736" ..../>
+      <Layer queryable="1" opaque="0">
+        <Name>geonode:DE_USNG_UTM18</Name>
+        <Title>DE_USNG_UTM18</Title>
+        <Abstract>No abstract provided</Abstract>
+        <KeywordList>
+          <Keyword>DE_USNG_UTM18</Keyword>
+          <Keyword>features</Keyword>
+        </KeywordList>
+        <CRS>EPSG:26918</CRS>
+        <CRS>CRS:84</CRS>
+        <EX_GeographicBoundingBox>
+          <westBoundLongitude>-75.93570725669369</westBoundLongitude>
+          <eastBoundLongitude>-75.00000000000001</eastBoundLongitude>
+          <southBoundLatitude>38.3856300861002</southBoundLatitude>
+          <northBoundLatitude>39.89406880610797</northBoundLatitude>
+        </EX_GeographicBoundingBox>
+        <BoundingBox CRS="CRS:84" .01" maxy="39.89406880610797"/>
+        <BoundingBox CRS="EPSG:26918" ..../>
+        <BoundingBox CRS="EPSG:4326" ..../>
+        <BoundingBox CRS="EPSG:3785" ..../>
+        <BoundingBox CRS="EPSG:3857" ..../>
+        <BoundingBox CRS="EPSG:900913" ..../>
+        <BoundingBox CRS="EPSG:32647" ..../>
+        <BoundingBox CRS="EPSG:32736" ..../>
+        <MetadataURL type="other">
+          <Format>other</Format>
+          <OnlineResource xlink:type="simple"
+xlink:href="http://localhost:8080/catalogue/csw?outputschema=...."/>
+        </MetadataURL>
+        <MetadataURL type="other">
+          <Format>other</Format>
+          <OnlineResource xlink:type="simple"
+xlink:href="http://localhost:8080/catalogue/csw?outputschema=...."/>
+        </MetadataURL>
+        <MetadataURL type="other">
+          <Format>other</Format>
+          <OnlineResource xlink:type="simple"
+xlink:href="http://localhost:8080/catalogue/csw?outputschema=...."/>
+        </MetadataURL>
+        <MetadataURL type="other">
+          <Format>other</Format>
+          <OnlineResource xlink:type="simple"
+xlink:href="http://localhost:8080/catalogue/csw?outputschema=...."/>
+        </MetadataURL>
+        <MetadataURL type="FGDC">
+          <Format>text/xml</Format>
+          <OnlineResource xlink:type="simple"
+xlink:href="http://localhost:8080/catalogue/csw?outputschema=...."/>
+        </MetadataURL>
+        <MetadataURL type="other">
+          <Format>other</Format>
+          <OnlineResource xlink:type="simple"
+xlink:href="http://localhost:8080/catalogue/csw?outputschema=...."/>
+        </MetadataURL>
+        <MetadataURL type="other">
+          <Format>other</Format>
+          <OnlineResource xlink:type="simple"
+xlink:href="http://localhost:8080/showmetadata/xsl/584"/>
+        </MetadataURL>
+        <Style>
+          <Name>geonode:DE_USNG_UTM18</Name>
+          <Title>Default Polygon</Title>
+          <Abstract>A sample style that draws a polygon</Abstract>
+          <LegendURL width="20" height="20">
+            <Format>image/png</Format>
+            <OnlineResource
+xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple"
+xlink:href="http://localhost:8080/geoserver/ows?service=WMS&amp;request=GetLegendGraphic&...."/>
+          </LegendURL>
+        </Style>
+      </Layer>"""
+        kwargs = {'content': content,
+                  'status': 200,
+                  'content_type': 'application/xml'}
+        _content = _response_callback(**kwargs).content
+        self.assertTrue(re.findall('http://localhost:8000/gs/ows', str(_content)))
+
+        kwargs = {'content': content,
+                  'status': 200,
+                  'content_type': 'text/xml; charset=UTF-8'}
+        _content = _response_callback(**kwargs).content
+        self.assertTrue(re.findall('http://localhost:8000/gs/ows', str(_content)))

@@ -18,16 +18,18 @@
 #
 #########################################################################
 
-from __future__ import with_statement
-
 import logging
 import traceback
 
 from decorator import decorator
 from kombu import BrokerConnection
 from kombu.common import maybe_declare
-from queues import queue_email_events, queue_geoserver_events,\
-    queue_notifications_events, queue_layer_viewers
+from .queues import (
+    queue_email_events,
+    queue_geoserver_events,
+    queue_notifications_events,
+    queue_layer_viewers
+)
 
 from . import (url,
                producers,
@@ -69,15 +71,15 @@ def sync_if_local_memory(func, *args, **kwargs):
             worker = Consumer(connection, max_messages)
             try:
                 worker.run(timeout=broker_socket_timeout)
-            except BaseException:
+            except Exception:
                 tb = traceback.format_exc()
                 msg = "Exception while publishing message: {}".format(tb)
                 logger.error(msg)
-                raise
+                raise Exception(msg)
         elif not getattr(connection.connection, 'driver_name', None):
             msg = "Exception while getting connection to {}".format(url)
             logger.error(msg)
-            raise
+            raise Exception(msg)
 
 
 @sync_if_local_memory
@@ -87,7 +89,6 @@ def send_email_producer(layer_uuid, user_id):
         payload = {
             "layer_uuid": layer_uuid,
             "user_id": user_id
-
         }
         producer.publish(
             payload,

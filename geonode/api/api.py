@@ -25,7 +25,7 @@ from django.db.models import Q
 from django.conf.urls import url
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 from django.db.models import Count
@@ -39,7 +39,8 @@ from tastypie.exceptions import BadRequest
 
 from geonode import qgis_server, geoserver
 from geonode.api.paginator import CrossSiteXHRPaginator
-from geonode.api.authorization import GeoNodeStyleAuthorization
+from geonode.api.authorization import GeoNodeStyleAuthorization, ApiLockdownAuthorization, \
+    GroupAuthorization, GroupProfileAuthorization
 from geonode.qgis_server.models import QGISServerStyle
 from guardian.shortcuts import get_objects_for_user
 from tastypie.bundle import Bundle
@@ -94,7 +95,10 @@ class CountJSONSerializer(Serializer):
                 resources = resources.filter(title__icontains=options['title_filter'])
 
             if options['type_filter']:
-                resources = resources.instance_of(options['type_filter'])
+                _type_filter = options['type_filter']
+                if not isinstance(_type_filter, str):
+                    _type_filter = _type_filter.__name__.lower()
+                resources = resources.filter(polymorphic_ctype__model=_type_filter)
 
         counts = list(resources.values(options['count_type']).annotate(count=Count(options['count_type'])))
 
@@ -165,6 +169,7 @@ class TagResource(TypeFilteredResource):
             'slug': ALL,
         }
         serializer = CountJSONSerializer()
+        authorization = ApiLockdownAuthorization()
 
 
 class ThesaurusKeywordResource(TypeFilteredResource):
@@ -206,10 +211,10 @@ class ThesaurusKeywordResource(TypeFilteredResource):
 
     class Meta:
         queryset = ThesaurusKeywordLabel.objects \
-                                        .all() \
-                                        .order_by('label') \
-                                        .select_related('keyword') \
-                                        .select_related('keyword__thesaurus')
+            .all() \
+            .order_by('label') \
+            .select_related('keyword') \
+            .select_related('keyword__thesaurus')
 
         resource_name = 'thesaurus/keywords'
         allowed_methods = ['get']
@@ -220,6 +225,7 @@ class ThesaurusKeywordResource(TypeFilteredResource):
             'thesaurus': ALL,
         }
         serializer = CountJSONSerializer()
+        authorization = ApiLockdownAuthorization()
 
 
 class RegionResource(TypeFilteredResource):
@@ -242,6 +248,7 @@ class RegionResource(TypeFilteredResource):
         }
         if settings.API_INCLUDE_REGIONS_COUNT:
             serializer = CountJSONSerializer()
+        authorization = ApiLockdownAuthorization()
 
 
 class TopicCategoryResource(TypeFilteredResource):
@@ -251,7 +258,7 @@ class TopicCategoryResource(TypeFilteredResource):
     def dehydrate_layers_count(self, bundle):
         request = bundle.request
         obj_with_perms = get_objects_for_user(request.user,
-                                              'base.view_resourcebase').instance_of(Layer)
+                                              'base.view_resourcebase').filter(polymorphic_ctype__model='layer')
         filter_set = bundle.obj.resourcebase_set.filter(id__in=obj_with_perms.values('id'))
 
         if not settings.SKIP_PERMS_FILTER:
@@ -279,6 +286,7 @@ class TopicCategoryResource(TypeFilteredResource):
             'identifier': ALL,
         }
         serializer = CountJSONSerializer()
+        authorization = ApiLockdownAuthorization()
 
 
 class GroupCategoryResource(TypeFilteredResource):
@@ -292,17 +300,39 @@ class GroupCategoryResource(TypeFilteredResource):
         include_resource_uri = False
         filtering = {'slug': ALL,
                      'name': ALL}
+        authorization = ApiLockdownAuthorization()
+
+    def apply_filters(self, request, applicable_filters):
+        filtered = super(
+            GroupCategoryResource,
+            self).apply_filters(
+            request,
+            applicable_filters)
+        return filtered
 
     def dehydrate_detail_url(self, bundle):
         return bundle.obj.get_absolute_url()
 
     def dehydrate_member_count(self, bundle):
-        return bundle.obj.groups.all().count()
+        request = bundle.request
+        user = request.user
+        filtered = bundle.obj.groups.all()
+        if not user.is_authenticated or user.is_anonymous:
+            filtered = filtered.exclude(access='private')
+        elif not user.is_superuser:
+            categories_ids = user.group_list_all().values('categories')
+            filtered = filtered.filter(
+                Q(id__in=categories_ids) |
+                ~Q(access='private')
+            )
+        return filtered.count()
 
     def dehydrate(self, bundle):
         """Provide additional resource counts"""
-
+        request = bundle.request
+        _user = request.user
         counts = _get_resource_counts(
+            _user,
             resourcebase_filter_kwargs={
                 'group__groupprofile__categories': bundle.obj
             }
@@ -319,6 +349,7 @@ class GroupProfileResource(ModelResource):
     )
     member_count = fields.CharField()
     manager_count = fields.CharField()
+    logo_url = fields.CharField()
     detail_url = fields.CharField()
 
     class Meta:
@@ -331,6 +362,7 @@ class GroupProfileResource(ModelResource):
             'categories': ALL_WITH_RELATIONS,
         }
         ordering = ['title', 'last_modified']
+        authorization = GroupProfileAuthorization()
 
     def dehydrate_member_count(self, bundle):
         """Provide relative URL to the geonode UI's page on the group"""
@@ -342,7 +374,13 @@ class GroupProfileResource(ModelResource):
 
     def dehydrate_detail_url(self, bundle):
         """Return relative URL to the geonode UI's page on the group"""
-        return reverse('group_detail', args=[bundle.obj.slug])
+        if bundle.obj.slug:
+            return reverse('group_detail', args=[bundle.obj.slug])
+        else:
+            return None
+
+    def dehydrate_logo_url(self, bundle):
+        return bundle.obj.logo_url
 
 
 class GroupResource(ModelResource):
@@ -361,35 +399,20 @@ class GroupResource(ModelResource):
         allowed_methods = ['get']
         filtering = {
             'name': ALL,
+            'title': ALL,
             'group_profile': ALL_WITH_RELATIONS,
         }
         ordering = ['name', 'last_modified']
-
-    def apply_filters(self, request, applicable_filters):
-        user = request.user
-        semi_filtered = super(
-            GroupResource,
-            self).apply_filters(
-            request,
-            applicable_filters)
-
-        filtered = semi_filtered
-        if not user.is_authenticated() or user.is_anonymous:
-            filtered = semi_filtered.exclude(groupprofile__access='private')
-        elif not user.is_superuser:
-            groups_member_of = user.group_list_all()
-            filtered = semi_filtered.filter(
-                Q(groupprofile__in=groups_member_of) |
-                ~Q(groupprofile__access='private')
-            )
-
-        return filtered
+        authorization = GroupAuthorization()
 
     def dehydrate(self, bundle):
         """Provide additional resource counts"""
-
+        request = bundle.request
+        _user = request.user
         counts = _get_resource_counts(
-            resourcebase_filter_kwargs={'group': bundle.obj})
+            _user,
+            resourcebase_filter_kwargs={'group': bundle.obj}
+        )
         bundle.data.update(resource_counts=counts)
         return bundle
 
@@ -453,23 +476,24 @@ class ProfileResource(TypeFilteredResource):
 
     def dehydrate_email(self, bundle):
         email = ''
-        if bundle.request.user.is_authenticated():
+        if bundle.request.user.is_superuser:
             email = bundle.obj.email
+
         return email
 
     def dehydrate_layers_count(self, bundle):
         obj_with_perms = get_objects_for_user(bundle.request.user,
-                                              'base.view_resourcebase').instance_of(Layer)
+                                              'base.view_resourcebase').filter(polymorphic_ctype__model='layer')
         return bundle.obj.resourcebase_set.filter(id__in=obj_with_perms.values('id')).distinct().count()
 
     def dehydrate_maps_count(self, bundle):
         obj_with_perms = get_objects_for_user(bundle.request.user,
-                                              'base.view_resourcebase').instance_of(Map)
+                                              'base.view_resourcebase').filter(polymorphic_ctype__model='map')
         return bundle.obj.resourcebase_set.filter(id__in=obj_with_perms.values('id')).distinct().count()
 
     def dehydrate_documents_count(self, bundle):
         obj_with_perms = get_objects_for_user(bundle.request.user,
-                                              'base.view_resourcebase').instance_of(Document)
+                                              'base.view_resourcebase').filter(polymorphic_ctype__model='document')
         return bundle.obj.resourcebase_set.filter(id__in=obj_with_perms.values('id')).distinct().count()
 
     def dehydrate_avatar_100(self, bundle):
@@ -519,6 +543,7 @@ class ProfileResource(TypeFilteredResource):
             'username': ALL,
         }
         serializer = CountJSONSerializer()
+        authorization = ApiLockdownAuthorization()
 
 
 class OwnersResource(TypeFilteredResource):
@@ -527,6 +552,12 @@ class OwnersResource(TypeFilteredResource):
 
     def dehydrate_full_name(self, bundle):
         return bundle.obj.get_full_name() or bundle.obj.username
+
+    def dehydrate_email(self, bundle):
+        email = ''
+        if bundle.request.user.is_superuser:
+            email = bundle.obj.email
+        return email
 
     def serialize(self, request, data, format, options=None):
         if options is None:
@@ -547,6 +578,7 @@ class OwnersResource(TypeFilteredResource):
             'username': ALL,
         }
         serializer = CountJSONSerializer()
+        authorization = ApiLockdownAuthorization()
 
 
 class QGISStyleResource(ModelResource):
@@ -588,7 +620,7 @@ class QGISStyleResource(ModelResource):
             """:type: geonode.qgis_server.QGISServerLayer"""
             style.layer = qgis_layer.layer
             style.type = 'qml'
-        except BaseException:
+        except Exception:
             pass
         return style
 
@@ -598,7 +630,7 @@ class QGISStyleResource(ModelResource):
             filters, **kwargs)
         # Convert layer__ filters into layer_styles__layer__
         updated_filters = {}
-        for key, value in filters.iteritems():
+        for key, value in filters.items():
             key = key.replace('layer__', 'layer_styles__layer__')
             updated_filters[key] = value
         return updated_filters
@@ -762,7 +794,7 @@ class GeoserverStyleResource(ModelResource):
             filters, **kwargs)
         # Convert layer__ filters into layer_styles__layer__
         updated_filters = {}
-        for key, value in filters.iteritems():
+        for key, value in filters.items():
             key = key.replace('layer__', 'layer_default_style__')
             updated_filters[key] = value
         return updated_filters
@@ -803,31 +835,36 @@ elif check_ogc_backend(geoserver.BACKEND_PACKAGE):
         pass
 
 
-def _get_resource_counts(
-        resourcebase_filter_kwargs
-):
+def _get_resource_counts(user, resourcebase_filter_kwargs):
     """Return a dict with counts of resources of various types
 
     The ``resourcebase_filter_kwargs`` argument should be a dict with a suitable
     queryset filter that can be applied to select only the relevant
     ``ResourceBase`` objects to use when retrieving counts. For example::
 
-        _get_resource_counts({
-            'group__slug': 'my-group',
-        })
+        _get_resource_counts(
+            user,
+            {
+                'group__slug': 'my-group',
+            }
+        )
 
     The above function call would result in only counting ``ResourceBase``
     objects that belong to the group that has ``my-group`` as slug
 
     """
-
-    qs = ResourceBase.objects.filter(
-        **resourcebase_filter_kwargs
-    ).values(
+    resources = get_visible_resources(
+        ResourceBase.objects.filter(**resourcebase_filter_kwargs),
+        user,
+        admin_approval_required=settings.ADMIN_MODERATE_UPLOADS,
+        unpublished_not_visible=settings.RESOURCE_PUBLISHING,
+        private_groups_not_visibile=settings.GROUP_PRIVATE_RESOURCES)
+    values = resources.values(
         'polymorphic_ctype__model',
         'is_approved',
         'is_published',
-    ).annotate(counts=Count('polymorphic_ctype__model'))
+    )
+    qs = values.annotate(counts=Count('polymorphic_ctype__model'))
     types = [
         'layer',
         'document',
@@ -845,14 +882,14 @@ def _get_resource_counts(
     for record in qs:
         resource_type = record['polymorphic_ctype__model']
         is_visible = all((record['is_approved'], record['is_published']))
-        counts['all']['total'] += 1
-        counts['all']['visible'] += 1 if is_visible else 0
-        counts['all']['published'] += 1 if record['is_published'] else 0
-        counts['all']['approved'] += 1 if record['is_approved'] else 0
+        counts['all']['total'] += record['counts']
+        counts['all']['visible'] += record['counts'] if is_visible else 0
+        counts['all']['published'] += record['counts'] if record['is_published'] else 0
+        counts['all']['approved'] += record['counts'] if record['is_approved'] else 0
         section = counts.get(resource_type)
         if section is not None:
-            section['total'] += 1
-            section['visible'] += 1 if is_visible else 0
-            section['published'] += 1 if record['is_published'] else 0
-            section['approved'] += 1 if record['is_approved'] else 0
+            section['total'] += record['counts']
+            section['visible'] += record['counts'] if is_visible else 0
+            section['published'] += record['counts'] if record['is_published'] else 0
+            section['approved'] += record['counts'] if record['is_approved'] else 0
     return counts

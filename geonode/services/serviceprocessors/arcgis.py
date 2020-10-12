@@ -73,7 +73,7 @@ class ArcMapServiceHandler(base.ServiceHandlerBase):
             _sname = utils.get_esri_service_name(self.url)
             _title_safe = safe(os.path.basename(os.path.normpath(_sname)))
             _title = _title_safe.replace('_', ' ').strip()
-        except BaseException:
+        except Exception:
             traceback.print_exc()
             _title = self.parsed_service.mapName
         if len(_title) == 0:
@@ -124,7 +124,7 @@ class ArcMapServiceHandler(base.ServiceHandlerBase):
         ll = None
         try:
             ll = self.parsed_service.layers[int(resource_id)]
-        except BaseException:
+        except Exception:
             traceback.print_exc()
 
         return self._layer_meta(ll) if ll else None
@@ -138,14 +138,15 @@ class ArcMapServiceHandler(base.ServiceHandlerBase):
         """
         try:
             return self._parse_layers(self.parsed_service.layers)
-        except BaseException:
+        except Exception:
+            traceback.print_exc()
             return None
 
     def _parse_layers(self, layers):
         map_layers = []
-        for l in layers:
-            map_layers.append(self._layer_meta(l))
-            map_layers.extend(self._parse_layers(l.subLayers))
+        for lyr in layers:
+            map_layers.append(self._layer_meta(lyr))
+            map_layers.extend(self._parse_layers(lyr.subLayers))
         return map_layers
 
     def _layer_meta(self, layer):
@@ -204,7 +205,7 @@ class ArcMapServiceHandler(base.ServiceHandlerBase):
     def has_resources(self):
         try:
             return True if len(self.parsed_service.layers) > 0 else False
-        except BaseException:
+        except Exception:
             traceback.print_exc()
             return False
 
@@ -218,15 +219,19 @@ class ArcMapServiceHandler(base.ServiceHandlerBase):
                                      layer_meta.extent.ymin,
                                      layer_meta.extent.xmax,
                                      layer_meta.extent.ymax])
+
+        typename = slugify("{}-{}".format(
+            layer_meta.id,
+            ''.join(c for c in layer_meta.title if ord(c) < 128)
+        ))
+
         return {
             "name": layer_meta.title,
             "store": self.name,
             "storeType": "remoteStore",
             "workspace": "remoteWorkspace",
-            "typename": slugify(
-                u"%s-%s" % (layer_meta.id, layer_meta.title.encode("ascii", "ignore"))),
-            "alternate": slugify(
-                u"%s-%s" % (layer_meta.id, layer_meta.title.encode("ascii", "ignore"))),
+            "typename": typename,
+            "alternate": typename,
             "title": layer_meta.title,
             "abstract": layer_meta.abstract,
             "bbox_x0": bbox[0],
@@ -251,7 +256,7 @@ class ArcMapServiceHandler(base.ServiceHandlerBase):
             **resource_fields
         )
         geonode_layer.full_clean()
-        geonode_layer.save()
+        geonode_layer.save(notify=True)
         geonode_layer.keywords.add(*keywords)
         geonode_layer.set_default_permissions()
         return geonode_layer
@@ -262,12 +267,14 @@ class ArcMapServiceHandler(base.ServiceHandlerBase):
             "service": "WMS",
             "version": self.parsed_service.version,
             "request": "GetMap",
-            "layers": geonode_layer.alternate.encode('utf-8'),
+            "layers": geonode_layer.alternate,
             "bbox": geonode_layer.bbox_string,
-            "srs": "EPSG:4326",
+            "srs": geonode_layer.srid,
+            "crs": geonode_layer.srid,
             "width": "200",
             "height": "150",
             "format": "image/png",
+            "styles": ""
         }
         kvp = "&".join("{}={}".format(*item) for item in params.items())
         thumbnail_remote_url = "{}?{}".format(
@@ -316,7 +323,7 @@ class ArcImageServiceHandler(ArcMapServiceHandler):
             _sname = utils.get_esri_service_name(self.url)
             _title_safe = safe(os.path.basename(os.path.normpath(_sname)))
             _title = _title_safe.replace('_', ' ').strip()
-        except BaseException:
+        except Exception:
             traceback.print_exc()
             _title = self.parsed_service.mapName
         if len(_title) == 0:

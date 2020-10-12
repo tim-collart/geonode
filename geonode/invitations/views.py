@@ -23,7 +23,7 @@ from django.contrib.sites.models import Site
 try:
     from django.urls import reverse
 except ImportError:
-    from django.core.urlresolvers import reverse
+    from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import ugettext as _
 from django.contrib.auth.decorators import login_required
@@ -97,11 +97,8 @@ class GeoNodeSendInvite(SendInvite):
         })
 
         email_template = 'invitations/email/email_invite'
-
-        get_invitations_adapter().send_mail(
-            email_template,
-            invite.email,
-            ctx)
+        adapter = get_invitations_adapter()
+        adapter.send_invitation_email(email_template, invite.email, ctx)
         invite.sent = timezone.now()
         invite.save()
 

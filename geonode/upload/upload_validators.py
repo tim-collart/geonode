@@ -20,7 +20,6 @@
 
 """Tools for performing validation of uploaded spatial files."""
 
-from __future__ import division
 
 from collections import namedtuple
 import os.path
@@ -47,7 +46,7 @@ def _supported_type(ext, supported_types):
 
 
 def validate_uploaded_files(cleaned, uploaded_files, field_spatial_types):
-    logger.info("uploaded_files: {}".format(uploaded_files))
+    logger.debug("uploaded_files: {}".format(uploaded_files))
     requires_datastore = () if ogc_server_settings.DATASTORE else (
         'csv',
         'kml')
@@ -209,7 +208,7 @@ def validate_kml(possible_files):
 
 def validate_kml_zip(kmz_django_file):
     kml_bytes = None
-    with zipfile.ZipFile(kmz_django_file) as zip_handler:
+    with zipfile.ZipFile(kmz_django_file, allowZip64=True) as zip_handler:
         zip_contents = zip_handler.namelist()
         kml_files = [i for i in zip_contents if i.lower().endswith(".kml")]
         if not kml_files:
@@ -226,7 +225,7 @@ def validate_kml_zip(kmz_django_file):
 
 
 def validate_kmz(kmz_django_file):
-    with zipfile.ZipFile(kmz_django_file) as zip_handler:
+    with zipfile.ZipFile(kmz_django_file, allowZip64=True) as zip_handler:
         zip_contents = zip_handler.namelist()
         kml_files = [i for i in zip_contents if i.lower().endswith(".kml")]
         if len(kml_files) > 1:
@@ -247,7 +246,7 @@ def validate_kmz(kmz_django_file):
 
 def validate_shapefile(zip_django_file):
     valid_extensions = None
-    with zipfile.ZipFile(zip_django_file) as zip_handler:
+    with zipfile.ZipFile(zip_django_file, allowZip64=True) as zip_handler:
         contents = zip_handler.namelist()
         if _validate_shapefile_components(contents):
             valid_extensions = ("zip",)
@@ -309,7 +308,7 @@ def validate_raster(contents, allow_multiple=False):
 
 def validate_raster_zip(zip_django_file):
     valid_extensions = None
-    with zipfile.ZipFile(zip_django_file) as zip_handler:
+    with zipfile.ZipFile(zip_django_file, allowZip64=True) as zip_handler:
         contents = zip_handler.namelist()
         valid_extensions = validate_raster(contents, allow_multiple=True)
     if valid_extensions:

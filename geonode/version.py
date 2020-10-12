@@ -25,7 +25,7 @@ import subprocess
 
 def get_version(version=None):
     "Returns a PEP 386-compliant version number from VERSION."
-    if version is None:
+    if version is None or not isinstance(version, list):
         from geonode import __version__ as version
     else:
         assert len(version) == 5
@@ -36,8 +36,7 @@ def get_version(version=None):
     # sub = .devN - for pre-alpha releases
     #     | {a|b|c}N - for alpha, beta and rc releases
     git_changeset = get_git_changeset()
-    parts = 2 if version[2] == 0 else 3
-    main = '.'.join(str(x) for x in version[:parts])
+    main = '.'.join(str(x) for x in version[:3])
     sub = ''
     if version[3] not in ('unstable', 'final'):
         mapping = {'beta': 'b', 'rc': 'rc'}
@@ -48,6 +47,12 @@ def get_version(version=None):
         elif version[3] != 'final':
             sub += '.build%s' % git_changeset
     return main + sub
+
+
+def version(request, version=None):
+    from django.http import HttpResponse
+    _v = get_version(version=version)
+    return HttpResponse(_v)
 
 
 def get_git_changeset():
@@ -64,7 +69,7 @@ def get_git_changeset():
                                     shell=True, cwd=repo_dir, universal_newlines=True)
         timestamp = git_show.communicate()[0].partition('\n')[0]
         return timestamp
-    except BaseException:
+    except Exception:
         try:
             timestamp = datetime.datetime.utcfromtimestamp(int(timestamp))
             return timestamp.strftime('%Y%m%d%H%M%S')

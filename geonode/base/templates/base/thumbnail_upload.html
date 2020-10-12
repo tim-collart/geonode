@@ -20,7 +20,7 @@
     <!-- current uploaded thumb -->
     {% if resource.curatedthumbnail %}
       <h5>Current thumbnail</h5>
-      <img src='{{ resource.curatedthumbnail.img_thumbnail.url }}'></img>
+      <img src='{{ resource.curatedthumbnail.thumbnail_url }}'></img>
       <form method="POST" class="post-form">
         {% csrf_token %}
           <button type="submit" class="save btn btn-default" name="remove-thumb">
@@ -38,7 +38,7 @@
   </div>
 
   <div class="col-md-4">
-    <h5>Auto generated thumbnail</h5>
+    <h5>{% trans "Auto generated thumbnail" %}</h5>
     <img src='{{ resource.thumbnail_url }}'></img>
   </div>
 

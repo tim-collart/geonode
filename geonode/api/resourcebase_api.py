@@ -20,7 +20,7 @@
 import json
 import re
 
-from django.core.urlresolvers import resolve
+from django.urls import resolve
 from django.db.models import Q
 from django.http import HttpResponse
 from django.conf import settings
@@ -89,6 +89,8 @@ class CommonMetaApi:
                  'group': ALL_WITH_RELATIONS,
                  'owner': ALL_WITH_RELATIONS,
                  'date': ALL,
+                 'purpose': ALL,
+                 'abstract': ALL
                  }
     ordering = ['date', 'title', 'popular_count']
     max_limit = None
@@ -157,27 +159,37 @@ class CommonModelApi(ModelResource):
             filters = {}
         orm_filters = super(CommonModelApi, self).build_filters(
             filters=filters, ignore_bad_filters=ignore_bad_filters, **kwargs)
-        if 'type__in' in filters and filters[
-                'type__in'] in FILTER_TYPES.keys():
+        if 'type__in' in filters and filters['type__in'] in FILTER_TYPES.keys():
             orm_filters.update({'type': filters.getlist('type__in')})
         if 'extent' in filters:
             orm_filters.update({'extent': filters['extent']})
-        # Nothing returned if +'s are used instead of spaces for text search,
-        # so swap them out. Must be a better way of doing this?
-        for filter in orm_filters:
-            if filter in ['title__contains', 'q']:
-                orm_filters[filter] = orm_filters[filter].replace("+", " ")
+        orm_filters['f_method'] = filters['f_method'] if 'f_method' in filters else 'and'
+        if not settings.SEARCH_RESOURCES_EXTENDED:
+            return self._remove_additional_filters(orm_filters)
+        return orm_filters
+
+    def _remove_additional_filters(self, orm_filters):
+        orm_filters.pop('abstract__icontains', None)
+        orm_filters.pop('purpose__icontains', None)
+        orm_filters.pop('f_method', None)
         return orm_filters
 
     def apply_filters(self, request, applicable_filters):
         types = applicable_filters.pop('type', None)
         extent = applicable_filters.pop('extent', None)
         keywords = applicable_filters.pop('keywords__slug__in', None)
-        semi_filtered = super(
-            CommonModelApi,
-            self).apply_filters(
-            request,
-            applicable_filters)
+        filtering_method = applicable_filters.pop('f_method', 'and')
+        if filtering_method == 'or':
+            filters = Q()
+            for f in applicable_filters.items():
+                filters |= Q(f)
+            semi_filtered = self.get_object_list(request).filter(filters)
+        else:
+            semi_filtered = super(
+                CommonModelApi,
+                self).apply_filters(
+                request,
+                applicable_filters)
         filtered = None
         if types:
             for the_type in types:
@@ -200,12 +212,11 @@ class CommonModelApi(ModelResource):
                             filtered = semi_filtered.filter(
                                 Layer___storeType=LAYER_SUBTYPES[super_type])
                 else:
+                    _type_filter = FILTER_TYPES[the_type].__name__.lower()
                     if filtered:
-                        filtered = filtered | semi_filtered.instance_of(
-                            FILTER_TYPES[the_type])
+                        filtered = filtered | semi_filtered.filter(polymorphic_ctype__model=_type_filter)
                     else:
-                        filtered = semi_filtered.instance_of(
-                            FILTER_TYPES[the_type])
+                        filtered = semi_filtered.filter(polymorphic_ctype__model=_type_filter)
         else:
             filtered = semi_filtered
 
@@ -264,19 +275,22 @@ class CommonModelApi(ModelResource):
         filtered = queryset.filter(Q(keywords__in=treeqs))
         return filtered
 
-    def filter_bbox(self, queryset, bbox):
-        """
-        modify the queryset q to limit to data that intersects with the
-        provided bbox
+    def filter_bbox(self, queryset, extent_filter):
+        from geonode.utils import bbox_to_projection
+        bbox = extent_filter.split(',')
+        bbox = list(map(str, bbox))
 
-        bbox - 4 tuple of floats representing 'southwest_lng,southwest_lat,
-        northeast_lng,northeast_lat'
-        returns the modified query
-        """
-        bbox = bbox.split(',')  # TODO: Why is this different when done through haystack?
-        bbox = map(str, bbox)  # 2.6 compat - float to decimal conversion
-        intersects = ~(Q(bbox_x0__gt=bbox[2]) | Q(bbox_x1__lt=bbox[0]) |
-                       Q(bbox_y0__gt=bbox[3]) | Q(bbox_y1__lt=bbox[1]))
+        intersects = (Q(bbox_x0__gte=bbox[0]) & Q(bbox_x1__lte=bbox[2]) &
+                      Q(bbox_y0__gte=bbox[1]) & Q(bbox_y1__lte=bbox[3]))
+
+        for proj in Layer.objects.order_by('srid').values('srid').distinct():
+            if proj['srid'] != 'EPSG:4326':
+                proj_bbox = bbox_to_projection(bbox + ['4326', ],
+                                               target_srid=int(proj['srid'][5:]))
+
+                if proj_bbox[-1] != 4326:
+                    intersects = intersects | (Q(bbox_x0__gte=proj_bbox[0]) & Q(bbox_x1__lte=proj_bbox[2]) & Q(
+                        bbox_y0__gte=proj_bbox[1]) & Q(bbox_y1__lte=proj_bbox[3]))
 
         return queryset.filter(intersects)
 
@@ -537,17 +551,15 @@ class CommonModelApi(ModelResource):
                 "total_count": total_count,
                 "facets": facets,
             },
-            "objects": map(lambda x: self.get_haystack_api_fields(x), objects),
+            "objects": [self.get_haystack_api_fields(x) for x in objects],
         }
 
         self.log_throttled_access(request)
         return self.create_response(request, object_list)
 
     def get_haystack_api_fields(self, haystack_object):
-        object_fields = dict(
-            (k, v) for k, v in haystack_object.get_stored_fields().items() if not re.search(
-                '_exact$|_sortable$', k))
-        return object_fields
+        return {k: v for k, v in haystack_object.get_stored_fields().items()
+                if not re.search('_exact$|_sortable$', k)}
 
     def get_list(self, request, **kwargs):
         """
@@ -607,7 +619,7 @@ class CommonModelApi(ModelResource):
             # replace thumbnail_url with curated_thumbs
             if hasattr(obj, 'curatedthumbnail'):
                 if hasattr(obj.curatedthumbnail.img_thumbnail, 'url'):
-                    formatted_obj['thumbnail_url'] = obj.curatedthumbnail.img_thumbnail.url
+                    formatted_obj['thumbnail_url'] = obj.curatedthumbnail.thumbnail_url
                 else:
                     formatted_obj['thumbnail_url'] = ''
 
@@ -636,7 +648,7 @@ class CommonModelApi(ModelResource):
                 filtered_objects_ids = [
                     item.id for item in data['objects'] if request.user.has_perm(
                         'view_resourcebase', item.get_self_resource())]
-        except BaseException:
+        except Exception:
             pass
 
         if isinstance(
@@ -789,7 +801,7 @@ class LayerResource(CommonModelApi):
 
             # replace thumbnail_url with curated_thumbs
             if hasattr(obj, 'curatedthumbnail'):
-                formatted_obj['thumbnail_url'] = obj.curatedthumbnail.img_thumbnail.url
+                formatted_obj['thumbnail_url'] = obj.curatedthumbnail.thumbnail_url
 
             # put the object on the response stack
             formatted_objects.append(formatted_obj)
@@ -811,8 +823,8 @@ class LayerResource(CommonModelApi):
         links = obj.link_set.all()
         if link_types:
             links = links.filter(link_type__in=link_types)
-        for l in links:
-            formatted_link = model_to_dict(l, fields=link_fields)
+        for lnk in links:
+            formatted_link = model_to_dict(lnk, fields=link_fields)
             dehydrated.append(formatted_link)
 
         return dehydrated
@@ -838,13 +850,13 @@ class LayerResource(CommonModelApi):
             # Default style
             try:
                 obj.qgis_default_style = obj.qgis_layer.default_style
-            except BaseException:
+            except Exception:
                 obj.qgis_default_style = None
 
             # Styles
             try:
                 obj.qgis_styles = obj.qgis_layer.styles
-            except BaseException:
+            except Exception:
                 obj.qgis_styles = []
         return obj
 
@@ -891,7 +903,7 @@ class LayerResource(CommonModelApi):
 
             layer_id = kwargs['id']
             layer = Layer.objects.get(id=layer_id)
-        except BaseException:
+        except Exception:
             return http.HttpBadRequest(reason=reason)
 
         from geonode.qgis_server.views import default_qml_style
@@ -996,7 +1008,7 @@ class MapResource(CommonModelApi):
             # replace thumbnail_url with curated_thumbs
             if hasattr(obj, 'curatedthumbnail'):
                 if hasattr(obj.curatedthumbnail.img_thumbnail, 'url'):
-                    formatted_obj['thumbnail_url'] = obj.curatedthumbnail.img_thumbnail.url
+                    formatted_obj['thumbnail_url'] = obj.curatedthumbnail.thumbnail_url
                 else:
                     formatted_obj['thumbnail_url'] = ''
 
@@ -1053,7 +1065,7 @@ class DocumentResource(CommonModelApi):
             # replace thumbnail_url with curated_thumbs
             if hasattr(obj, 'curatedthumbnail'):
                 if hasattr(obj.curatedthumbnail.img_thumbnail, 'url'):
-                    formatted_obj['thumbnail_url'] = obj.curatedthumbnail.img_thumbnail.url
+                    formatted_obj['thumbnail_url'] = obj.curatedthumbnail.thumbnail_url
                 else:
                     formatted_obj['thumbnail_url'] = ''
 

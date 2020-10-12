@@ -27,7 +27,7 @@ from django import forms
 from django.contrib import auth
 from django.conf import settings
 from django.views.generic.base import View
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.core.management import call_command
 from django.views.decorators.csrf import csrf_exempt
 from geonode.decorators import view_decorator, superuser_protected
@@ -610,7 +610,7 @@ class UserNotificationConfigView(View):
                   'steps_calculated',
                   'unit',
                   'is_enabled',)
-        if auth.get_user(request).is_authenticated():
+        if auth.get_user(request).is_authenticated:
             obj = self.get_object()
             out['success'] = True
             out['status'] = 'ok'
@@ -629,7 +629,7 @@ class UserNotificationConfigView(View):
     def post(self, request, *args, **kwargs):
         out = {'success': False, 'status': 'error', 'data': [], 'errors': {}}
         status = 500
-        if auth.get_user(request).is_authenticated():
+        if auth.get_user(request).is_authenticated:
             obj = self.get_object()
             try:
                 is_json = True
@@ -670,7 +670,7 @@ class NotificationsList(FilteredView):
 
     def get_filter_args(self, *args, **kwargs):
         self.errors = {}
-        if not auth.get_user(self.request).is_authenticated():
+        if not auth.get_user(self.request).is_authenticated:
             self.errors = {'user': ['User is not authenticated']}
         return {}
 
@@ -726,9 +726,9 @@ class StatusCheckView(View):
                 levels.add(ncd.severity)
                 problems.append(dump(ncd, self.fields))
         if levels:
-            for l in _levels:
-                if l in levels:
-                    d['health_level'] = l
+            for lyr in _levels:
+                if lyr in levels:
+                    d['health_level'] = lyr
                     break
 
         return json_response(data)
@@ -736,7 +736,7 @@ class StatusCheckView(View):
 
 class AutoconfigureView(View):
     def post(self, request, *args, **kwargs):
-        if not auth.get_user(request).is_authenticated():
+        if not auth.get_user(request).is_authenticated:
             out = {'success': False,
                    'status': 'error',
                    'errors': {'user': ['User is not authenticated']}

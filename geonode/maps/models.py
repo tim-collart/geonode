@@ -24,18 +24,16 @@ import uuid
 from django.conf import settings
 from django.db import models
 from django.db.models import signals
-try:
-    import json
-except ImportError:
-    from django.utils import simplejson as json
+import json
 from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import ugettext_lazy as _
 from django.core.exceptions import ObjectDoesNotExist
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.template.defaultfilters import slugify
 from django.core.cache import cache
 
 from geonode.layers.models import Layer
+from geonode.compat import ensure_string
 from geonode.base.models import ResourceBase, resourcebase_post_save
 from geonode.maps.signals import map_changed_signal
 from geonode.security.utils import remove_object_permissions
@@ -50,7 +48,7 @@ from geonode import geoserver, qgis_server  # noqa
 from geonode.utils import check_ogc_backend
 
 from deprecated import deprecated
-from agon_ratings.models import OverallRating
+from pinax.ratings.models import OverallRating
 
 logger = logging.getLogger("geonode.maps.models")
 
@@ -92,7 +90,7 @@ class Map(ResourceBase, GXPMapBase):
         blank=True)
     # Full URL for featured map view, ie http://domain/someview
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s by %s' % (
             self.title, (self.owner.username if self.owner else "<Anonymous>"))
 
@@ -130,7 +128,7 @@ class Map(ResourceBase, GXPMapBase):
                 pass
 
         if layer_filter:
-            layers = [l for l in layers if layer_filter(l)]
+            layers = [lyr for lyr in layers if layer_filter(lyr)]
 
         # the readme text will appear in a README file in the zip
         readme = (
@@ -171,26 +169,46 @@ class Map(ResourceBase, GXPMapBase):
         """
 
         template_name = hookset.update_from_viewer(conf, context=context)
-        conf = context['config']
+        if not isinstance(context, dict):
+            try:
+                context = json.loads(ensure_string(context))
+            except Exception:
+                pass
 
-        self.title = conf['title'] if 'title' in conf else conf['about']['title']
-        self.abstract = conf['abstract'] if 'abstract' in conf else conf['about']['abstract']
+        conf = context.get("config", {})
+        if not isinstance(conf, dict) or isinstance(conf, bytes):
+            try:
+                conf = json.loads(ensure_string(conf))
+            except Exception:
+                conf = {}
 
-        center = conf['map']['center'] if 'center' in conf['map'] else settings.DEFAULT_MAP_CENTER
-        self.zoom = conf['map']['zoom'] if 'zoom' in conf['map'] else settings.DEFAULT_MAP_ZOOM
-        self.center_x = center['x'] if isinstance(center, dict) else center[0]
-        self.center_y = center['y'] if isinstance(center, dict) else center[1]
-        if 'bbox' not in conf['map']:
+        about = conf.get("about", {})
+        self.title = conf.get("title", about.get("title", ""))
+        self.abstract = conf.get("abstract", about.get("abstract", ""))
+
+        _map = conf.get("map", {})
+        center = _map.get("center", settings.DEFAULT_MAP_CENTER)
+        self.zoom = _map.get("zoom", settings.DEFAULT_MAP_ZOOM)
+
+        if isinstance(center, dict):
+            self.center_x = center.get('x')
+            self.center_y = center.get('y')
+        else:
+            self.center_x, self.center_y = center
+
+        projection = _map.get("projection", settings.DEFAULT_MAP_CRS)
+        bbox = _map.get("bbox", None)
+
+        if bbox:
+            self.set_bounds_from_bbox(bbox, projection)
+        else:
             self.set_bounds_from_center_and_zoom(
                 self.center_x,
                 self.center_y,
                 self.zoom)
-        else:
-            # Must be in the form : [x0, x1, y0, y1]
-            self.set_bounds_from_bbox(conf['map']['bbox'], conf['map']['projection'])
 
         if self.projection is None or self.projection == '':
-            self.projection = conf['map']['projection']
+            self.projection = projection
 
         if self.uuid is None or self.uuid == '':
             self.uuid = str(uuid.uuid1())
@@ -198,17 +216,17 @@ class Map(ResourceBase, GXPMapBase):
         def source_for(layer):
             try:
                 return conf["sources"][layer["source"]]
-            except BaseException:
+            except Exception:
                 if 'url' in layer:
                     return {'url': layer['url']}
                 else:
                     return {}
 
-        layers = [l for l in conf["map"]["layers"]]
-        layer_names = set([l.alternate for l in self.local_layers])
+        layers = [lyr for lyr in _map.get("layers", [])]
+        layer_names = set(lyr.alternate for lyr in self.local_layers)
 
         self.layer_set.all().delete()
-        self.keywords.add(*conf['map'].get('keywords', []))
+        self.keywords.add(*_map.get('keywords', []))
 
         for ordering, layer in enumerate(layers):
             self.layer_set.add(
@@ -216,9 +234,9 @@ class Map(ResourceBase, GXPMapBase):
                     self.id, MapLayer, layer, source_for(layer), ordering
                 ))
 
-        self.save()
+        self.save(notify=True)
 
-        if layer_names != set([l.alternate for l in self.local_layers]):
+        if layer_names != set([lyr.alternate for lyr in self.local_layers]):
             map_changed_signal.send_robust(sender=self, what_changed='layers')
 
         return template_name
@@ -310,7 +328,7 @@ class Map(ResourceBase, GXPMapBase):
         # Save again to persist the zoom and bbox changes and
         # to generate the thumbnail.
         self.set_missing_info()
-        self.save()
+        self.save(notify=True)
 
     @property
     def sender(self):
@@ -351,7 +369,7 @@ class Map(ResourceBase, GXPMapBase):
                     'catalog': gs_catalog.get_layergroup(lg_name),
                     'ows': ogc_server_settings.ows
                 }
-            except BaseException:
+            except Exception:
                 return {
                     'catalog': None,
                     'ows': ogc_server_settings.ows
@@ -387,7 +405,7 @@ class Map(ResourceBase, GXPMapBase):
                 style = ml.styles or getattr(layer.default_style, 'name', '')
                 layers.append(layer)
                 lg_styles.append(style)
-        lg_layers = [l.name for l in layers]
+        lg_layers = [lyr.name for lyr in layers]
 
         # Group layer bounds and name
         lg_bounds = [str(coord) for coord in self.bbox]
@@ -419,7 +437,7 @@ class MapLayer(models.Model, GXPLayerBase):
     and the file format to use for image tiles.
     """
 
-    map = models.ForeignKey(Map, related_name="layer_set")
+    map = models.ForeignKey(Map, related_name="layer_set", on_delete=models.CASCADE)
     # The map containing this layer
 
     stack_order = models.IntegerField(_('stack order'))
@@ -508,6 +526,8 @@ class MapLayer(models.Model, GXPLayerBase):
                         alternate=self.name,
                         remote_service__base_url=self.ows_url)
                 attribute_cfg = layer.attribute_config()
+                if "ftInfoTemplate" in attribute_cfg:
+                    cfg["ftInfoTemplate"] = attribute_cfg["ftInfoTemplate"]
                 if "getFeatureInfo" in attribute_cfg:
                     cfg["getFeatureInfo"] = attribute_cfg["getFeatureInfo"]
                 if not user.has_perm(
@@ -515,7 +535,7 @@ class MapLayer(models.Model, GXPLayerBase):
                         obj=layer.resourcebase_ptr):
                     cfg['disabled'] = True
                     cfg['visibility'] = False
-            except BaseException:
+            except Exception:
                 # shows maplayer with pink tiles,
                 # and signals that there is problem
                 # TODO: clear orphaned MapLayers
@@ -533,26 +553,42 @@ class MapLayer(models.Model, GXPLayerBase):
 
     @property
     def layer_title(self):
-        if self.local:
-            title = Layer.objects.get(store=self.store, alternate=self.name).title
-        else:
+        title = None
+        try:
+            if self.local:
+                if self.store:
+                    title = Layer.objects.get(
+                        store=self.store, alternate=self.name).title
+                else:
+                    title = Layer.objects.get(alternate=self.name).title
+        except Exception:
+            title = None
+        if title is None:
             title = self.name
         return title
 
     @property
     def local_link(self):
-        if self.local:
-            layer = Layer.objects.get(store=self.store, alternate=self.name)
-            link = "<a href=\"%s\">%s</a>" % (
-                layer.get_absolute_url(), layer.title)
-        else:
+        link = None
+        try:
+            if self.local:
+                if self.store:
+                    layer = Layer.objects.get(
+                        store=self.store, alternate=self.name)
+                else:
+                    layer = Layer.objects.get(alternate=self.name)
+                link = "<a href=\"%s\">%s</a>" % (
+                    layer.get_absolute_url(), layer.title)
+        except Exception:
+            link = None
+        if link is None:
             link = "<span>%s</span> " % self.name
         return link
 
     class Meta:
         ordering = ["stack_order"]
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s?layers=%s' % (self.ows_url, self.name)
 
 
@@ -565,7 +601,7 @@ def pre_delete_map(instance, sender, **kwrargs):
 
 
 class MapSnapshot(models.Model):
-    map = models.ForeignKey(Map, related_name="snapshot_set")
+    map = models.ForeignKey(Map, related_name="snapshot_set", on_delete=models.CASCADE)
     """
     The ID of the map this snapshot was generated from.
     """
@@ -580,7 +616,7 @@ class MapSnapshot(models.Model):
     The date/time the snapshot was created.
     """
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, blank=True, null=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, blank=True, null=True, on_delete=models.CASCADE)
     """
     The user who created the snapshot.
     """

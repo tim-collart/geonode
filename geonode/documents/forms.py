@@ -19,10 +19,10 @@
 #########################################################################
 
 from geonode.base.forms import ResourceBaseForm
-import json
 import os
 import re
-from autocomplete_light.registry import autodiscover
+import json
+import logging
 
 from django import forms
 from django.utils.translation import ugettext as _
@@ -39,7 +39,7 @@ from geonode.documents.models import (
 from geonode.maps.models import Map
 from geonode.layers.models import Layer
 
-autodiscover()  # flake8: noqa
+logger = logging.getLogger(__name__)
 
 
 class DocumentFormMixin(object):
@@ -109,9 +109,9 @@ class DocumentForm(ResourceBaseForm, DocumentFormMixin):
 
 
 class DocumentDescriptionForm(forms.Form):
-    title = forms.CharField(300)
-    abstract = forms.CharField(2000, widget=forms.Textarea, required=False)
-    keywords = forms.CharField(500, required=False)
+    title = forms.CharField(max_length=300)
+    abstract = forms.CharField(max_length=2000, widget=forms.Textarea, required=False)
+    keywords = forms.CharField(max_length=500, required=False)
 
 
 class DocumentReplaceForm(forms.ModelForm):
@@ -202,9 +202,11 @@ class DocumentCreateForm(TranslationModelForm, DocumentFormMixin):
         doc_url = self.cleaned_data.get('doc_url')
 
         if not doc_file and not doc_url:
+            logger.debug("Document must be a file or url.")
             raise forms.ValidationError(_("Document must be a file or url."))
 
         if doc_file and doc_url:
+            logger.debug("A document cannot have both a file and a url.")
             raise forms.ValidationError(
                 _("A document cannot have both a file and a url."))
 
@@ -219,6 +221,7 @@ class DocumentCreateForm(TranslationModelForm, DocumentFormMixin):
         if doc_file and not os.path.splitext(
                 doc_file.name)[1].lower()[
                 1:] in settings.ALLOWED_DOCUMENT_TYPES:
+            logger.debug("This file type is not allowed")
             raise forms.ValidationError(_("This file type is not allowed"))
 
         return doc_file

@@ -26,10 +26,14 @@ from django.core.management.base import BaseCommand
 
 from geonode.layers.models import Layer
 from geonode.security.views import _perms_info_json
+from geonode.base.utils import remove_duplicate_links
 from geonode.geoserver.helpers import set_attributes_from_geoserver
 
 
-def sync_geonode_layers(ignore_errors, filter, username,
+def sync_geonode_layers(ignore_errors,
+                        filter,
+                        username,
+                        removeduplicates,
                         updatepermissions,
                         updatethumbnails,
                         updateattributes):
@@ -44,9 +48,9 @@ def sync_geonode_layers(ignore_errors, filter, username,
     for layer in layers:
         try:
             count += 1
-            print 'Syncing layer %s/%s: %s' % (count, layers_count, layer.name)
+            print("Syncing layer {}/{}: {}".format(count, layers_count, layer.name))
             if updatepermissions:
-                print 'Syncing permissions...'
+                print("Syncing permissions...")
                 # sync permissions in GeoFence
                 perm_spec = json.loads(_perms_info_json(layer))
                 # re-sync GeoFence security rules
@@ -55,22 +59,26 @@ def sync_geonode_layers(ignore_errors, filter, username,
                 # recalculate the layer statistics
                 set_attributes_from_geoserver(layer, overwrite=True)
             if updatethumbnails:
-                print 'Regenerating thumbnails...'
+                print("Regenerating thumbnails...")
                 layer.save()
+            if removeduplicates:
+                # remove duplicates
+                print("Removing duplicate links...")
+                remove_duplicate_links(layer)
         except Exception:
             layer_errors.append(layer.alternate)
             exception_type, error, traceback = sys.exc_info()
-            print exception_type, error, traceback
+            print(exception_type, error, traceback)
             if ignore_errors:
                 pass
             else:
                 import traceback
                 traceback.print_exc()
-                print 'Stopping process because --ignore-errors was not set and an error was found.'
+                print("Stopping process because --ignore-errors was not set and an error was found.")
                 return
-    print 'There are %s layers which could not be updated because of errors' % len(layer_errors)
+    print("There are {} layers which could not be updated because of errors".format(len(layer_errors)))
     for layer_error in layer_errors:
-        print layer_error
+        print(layer_error)
 
 
 class Command(BaseCommand):
@@ -84,6 +92,14 @@ class Command(BaseCommand):
             dest='ignore_errors',
             default=False,
             help='Stop after any errors are encountered.'
+        )
+        parser.add_argument(
+            '-d',
+            '--remove-duplicates',
+            action='store_true',
+            dest='removeduplicates',
+            default=False,
+            help='Remove duplicates first.'
         )
         parser.add_argument(
             '-f',
@@ -118,6 +134,7 @@ class Command(BaseCommand):
 
     def handle(self, **options):
         ignore_errors = options.get('ignore_errors')
+        removeduplicates = options.get('removeduplicates')
         updatepermissions = options.get('updatepermissions')
         updatethumbnails = options.get('updatethumbnails')
         updateattributes = options.get('updateattributes')
@@ -126,5 +143,11 @@ class Command(BaseCommand):
             username = None
         else:
             username = options.get('username')
-        sync_geonode_layers(ignore_errors, filter, username,
-                            updatepermissions, updatethumbnails, updateattributes)
+        sync_geonode_layers(
+            ignore_errors,
+            filter,
+            username,
+            removeduplicates,
+            updatepermissions,
+            updatethumbnails,
+            updateattributes)

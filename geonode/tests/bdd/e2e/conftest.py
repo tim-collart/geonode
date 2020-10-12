@@ -20,7 +20,7 @@
 
 import os
 import signal
-from urlparse import urljoin
+from urllib.parse import urljoin
 
 import pytest
 # from geonode import settings as gn_settings
@@ -45,12 +45,12 @@ def en_browser(browser, bdd_server):
     yield en_browser
     try:
         en_browser.service.process.send_signal(signal.SIGTERM)
-    except BaseException:
+    except Exception:
         pass
     try:
         # quit the node proc
         en_browser.quit()
-    except BaseException:
+    except Exception:
         pass
 
 

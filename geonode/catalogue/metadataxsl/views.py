@@ -37,19 +37,21 @@ logger = logging.getLogger(__name__)
 
 @xframe_options_exempt
 def prefix_xsl_line(req, id):
-    resource = get_object_or_404(ResourceBase, pk=id)
-
     # if the layer is in the catalogue, try to get the distribution urls
     # that cannot be precalculated.
+    resource = None
     try:
+        resource = get_object_or_404(ResourceBase, pk=id)
         catalogue = get_catalogue()
         record = catalogue.get_record(resource.uuid)
         if record:
             logger.debug(record.xml)
-    except Exception as err:
-        msg = 'Could not connect to catalogue to save information for layer "%s"' % str(resource.title)
-        logger.warn(msg)
-        raise err
+    except Exception:
+        logger.debug(traceback.format_exc())
+        msg = 'Could not connect to catalogue to save information for layer "%s"' % str(resource)
+        return HttpResponse(
+            msg
+        )
 
     try:
         # generate an XML document (GeoNode's default is ISO)
@@ -58,8 +60,8 @@ def prefix_xsl_line(req, id):
         else:
             md_doc = catalogue.catalogue.csw_gen_xml(resource, 'catalogue/full_metadata.xml')
         xml = md_doc
-    except BaseException:
-        logger.error(traceback.format_exc())
+    except Exception:
+        logger.debug(traceback.format_exc())
         return HttpResponse(
             "Resource Metadata not available!"
         )

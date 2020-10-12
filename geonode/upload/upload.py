@@ -40,6 +40,7 @@ import shutil
 import uuid
 import zipfile
 import traceback
+from six import string_types
 
 from django.conf import settings
 from django.db.models import Max
@@ -176,7 +177,7 @@ def upload(
 
     if user is None:
         user = get_default_user()
-    if isinstance(user, basestring):
+    if isinstance(user, string_types):
         user = get_user_model().objects.get(username=user)
     import_session = save_step(
         user,
@@ -221,8 +222,8 @@ def upload(
 def _get_next_id():
     # importer tracks ids by autoincrement but is prone to corruption
     # which potentially may reset the id - hopefully prevent this...
-    upload_next_id = Upload.objects.all().aggregate(
-        Max('import_id')).values()[0]
+    upload_next_id = list(Upload.objects.all().aggregate(
+        Max('import_id')).values())[0]
     upload_next_id = upload_next_id if upload_next_id else 0
     # next_id = next_id + 1 if next_id else 1
     importer_sessions = gs_uploader.get_sessions()
@@ -401,7 +402,7 @@ def save_step(user, layer, spatial_files, overwrite=True, mosaic=False,
         # @todo once the random tmp9723481758915 type of name is not
         # around, need to track the name computed above, for now, the
         # target store name can be used
-    except BaseException as e:
+    except Exception as e:
         tb = traceback.format_exc()
         logger.debug(tb)
         logger.exception('Error creating import session')
@@ -603,14 +604,14 @@ def final_step(upload_session, user, charset="UTF-8"):
         if os.path.isfile(sld_file):
             try:
                 f = open(sld_file, 'r')
-            except BaseException:
+            except Exception:
                 pass
         elif upload_session.tempdir and os.path.exists(upload_session.tempdir):
             tempdir = upload_session.tempdir
             if os.path.isfile(os.path.join(tempdir, sld_file)):
                 try:
                     f = open(os.path.join(tempdir, sld_file), 'r')
-                except BaseException:
+                except Exception:
                     pass
 
         if f:
@@ -629,6 +630,7 @@ def final_step(upload_session, user, charset="UTF-8"):
                 sld,
                 raw=True,
                 workspace=settings.DEFAULT_WORKSPACE)
+            cat.reset()
         except geoserver.catalog.ConflictingDataError as e:
             msg = 'There was already a style named %s in GeoServer, try using another name: "%s"' % (
                 name, str(e))
@@ -638,6 +640,7 @@ def final_step(upload_session, user, charset="UTF-8"):
                     sld,
                     raw=True,
                     workspace=settings.DEFAULT_WORKSPACE)
+                cat.reset()
             except geoserver.catalog.ConflictingDataError as e:
                 msg = 'There was already a style named %s in GeoServer, cannot overwrite: "%s"' % (
                     name, str(e))
@@ -648,17 +651,16 @@ def final_step(upload_session, user, charset="UTF-8"):
             try:
                 style = cat.get_style(
                     name, workspace=settings.DEFAULT_WORKSPACE) or cat.get_style(name)
-            except BaseException:
+            except Exception:
                 logger.warn('Could not retreive the Layer default Style name')
                 # what are we doing with this var?
                 msg = 'No style could be created for the layer, falling back to POINT default one'
                 try:
                     style = cat.get_style(name + '_layer', workspace=settings.DEFAULT_WORKSPACE) or \
                         cat.get_style(name + '_layer')
-                except BaseException:
+                except Exception as e:
                     style = cat.get_style('point')
-                    logger.warn(msg)
-                    e.args = (msg,)
+                    logger.warn(str(e))
 
         if style:
             publishing.default_style = style
@@ -755,6 +757,7 @@ def final_step(upload_session, user, charset="UTF-8"):
 
     # Should we throw a clearer error here?
     assert saved_layer is not None
+    saved_layer.save()
 
     # Create a new upload session
     geonode_upload_session = UploadSession.objects.create(resource=saved_layer, user=user)
@@ -836,7 +839,7 @@ def final_step(upload_session, user, charset="UTF-8"):
         # If it's contained within a zip, need to extract it
         if upload_session.base_file.archive:
             archive = upload_session.base_file.archive
-            zf = zipfile.ZipFile(archive, 'r')
+            zf = zipfile.ZipFile(archive, 'r', allowZip64=True)
             zf.extract(xml_file[0], os.path.dirname(archive))
             # Assign the absolute path to this file
             xml_file[0] = os.path.dirname(archive) + '/' + xml_file[0]
@@ -896,11 +899,11 @@ def final_step(upload_session, user, charset="UTF-8"):
         # If it's contained within a zip, need to extract it
         if upload_session.base_file.archive:
             archive = upload_session.base_file.archive
-            zf = zipfile.ZipFile(archive, 'r')
+            zf = zipfile.ZipFile(archive, 'r', allowZip64=True)
             zf.extract(sld_file[0], os.path.dirname(archive))
             # Assign the absolute path to this file
             sld_file[0] = os.path.dirname(archive) + '/' + sld_file[0]
-        sld = open(sld_file[0]).read()
+        sld = open(sld_file[0], "rb").read()
         set_layer_style(
             saved_layer,
             saved_layer.alternate,
@@ -932,6 +935,6 @@ def final_step(upload_session, user, charset="UTF-8"):
 
     signals.upload_complete.send(sender=final_step, layer=saved_layer)
     geonode_upload_session.save()
-    saved_layer.save()
+    saved_layer.save(notify=not created)
     cat._cache.clear()
     return saved_layer

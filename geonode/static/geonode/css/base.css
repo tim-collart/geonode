@@ -6837,6 +6837,7 @@ div#user_messages {
   }
   to {
     opacity: 0;
+    visibility: hidden;
   }
 }
 @-webkit-keyframes msgDisappear {
@@ -6845,13 +6846,14 @@ div#user_messages {
   }
   to {
     opacity: 0;
+    visibility: hidden;
   }
 }
 body {
   background: #333333;
   font-family: 'Lato', sans-serif;
   font-size: 16px;
-  padding-top: 60px;
+  padding-top: 20px;
 }
 a {
   color: #2c689c;
@@ -6898,6 +6900,7 @@ form input {
   padding-bottom: 40px;
   padding-top: 10px;
   width: 100%;
+  margin-top: 60px;
 }
 article.tab-pane {
   padding: 20px 0;
@@ -6922,6 +6925,9 @@ article.tab-pane {
 .navbar-inverse {
   background-color: #333333;
   border: 0;
+}
+.navbar-inverse .nav-container {
+  margin: 0 2% 0 2%;
 }
 .navbar-inverse .navbar-nav > li > a {
   color: white;
@@ -7095,6 +7101,11 @@ article.tab-pane {
 		color: white;*/
   padding: 1em 0;
 }
+.home #datasets .container .text-center .row {
+  display: flex;
+  display: -webkit-flex;
+  flex-wrap: wrap;
+}
 .home #datasets p {
   font-size: 12px;
 }
@@ -7125,12 +7136,15 @@ article.tab-pane {
   padding: 2em 0;
   text-align: center;
 }
+.home #showcase .row {
+  margin: 0px;
+}
 .home #showcase .col-md-3 {
   padding: 2em 1em;
 }
 .home #showcase .col-md-3 img {
-  height: 180px;
-  width: 100%;
+  max-height: 180px;
+  width: auto;
 }
 .home #showcase p {
   font-size: 18px;
@@ -7360,11 +7374,10 @@ article.tab-pane {
   cursor: pointer;
   word-break: break-all;
   padding-left: 0px;
-  padding-left: 35px;
+  padding-left: 12px;
 }
 .treeview span.icon {
   margin-right: 5px;
-  margin-left: -18px;
 }
 span.icon.node-icon:before {
   font-family: FontAwesome;
@@ -7617,6 +7630,9 @@ nav.filter li a {
   width: 480px;
 }
 @media (max-width: 991px) {
+  body {
+    padding-top: 70px;
+  }
   #upload_form input[type="text"] {
     width: 360px;
   }
@@ -7907,10 +7923,10 @@ footer form {
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   }
   .navbar-collapse.collapse {
-    display: none!important;
+    display: none !important;
   }
   .navbar-nav {
-    float: none!important;
+    float: none !important;
     margin: 7.5px -15px;
   }
   .navbar-nav > li {
@@ -7922,10 +7938,10 @@ footer form {
   }
   /* since 3.1.0 */
   .navbar-collapse.collapse.in {
-    display: block!important;
+    display: block !important;
   }
   .collapsing {
-    overflow: hidden!important;
+    overflow: hidden !important;
   }
   .home .navbar-inverse {
     background-color: #333333;
@@ -7950,6 +7966,9 @@ footer form {
 }
 /* Download Layer Filtering Modal
 ----------------------- */
+#download_tab1 li.active {
+  list-style-type: none;
+}
 .gear {
   -webkit-animation: rotation 6s infinite linear;
   -moz-animation: rotation 6s infinite linear;
@@ -8041,4 +8060,201 @@ form-inline {
 #missing-values {
   color: #bd362f;
   font-style: italic;
+}
+/** Metadata select2 styles */
+.has-error {
+  color: #a94442 !important;
+}
+.has-error .select2-selection {
+  border-color: #a94442 !important;
+}
+/** Autocomplete styling **/
+.autocomplete-input #text_search_input,
+.autocomplete-input #region_search_input {
+  width: 100%;
+}
+.autocomplete-input .ac-results {
+  position: absolute;
+  border: 1px solid #eeeeee;
+  border-top: none;
+  border-radius: 5px;
+  outline-width: 0;
+  text-indent: 5px;
+  margin-top: 0px;
+  z-index: 10000;
+}
+.autocomplete-input .ac-results .result-wrapper {
+  border-bottom: 1px solid #eeeeee;
+  padding: 3px;
+  background-color: white;
+}
+.autocomplete-input .ac-results .result-wrapper:hover {
+  background-color: #eeeeee;
+  opacity: 1;
+}
+.autocomplete-input .ac-results .result-wrapper:last-child {
+  border-bottom: none;
+}
+.autocomplete-input .ac-results .result-wrapper .ac-result {
+  border: none;
+  text-decoration: none;
+  color: black;
+  padding: 0px;
+}
+/** Autocomplete for thesaurus field in advanced metadata edit views
+  There should be a better way to do this!
+**/
+#metadata_update .select2-container {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+#metadata_update .select2-selection {
+  min-height: 42px !important;
+  height: auto !important;
+}
+#metadata_update .select2-container--default .select2-selection--single .select2-selection__arrow {
+  top: 8px !important;
+}
+#metadata_update .form-controls {
+  padding-right: 0px !important;
+  padding-left: 0px !important;
+}
+#metadata_update .form-group {
+  margin-right: 0px;
+  margin-left: 0px;
+}
+.inbox-checkbox label {
+  cursor: pointer;
+  position: relative;
+  left: 30%;
+}
+.inbox-checkbox label::before {
+  display: inline-block;
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  border: 1px solid;
+  border-color: #777777;
+}
+.inbox-checkbox label::after {
+  position: absolute;
+  content: "";
+  display: inline-block;
+  height: 6px;
+  width: 9px;
+  top: 4px;
+  left: 4px;
+  border-left: 2px solid;
+  border-bottom: 2px solid;
+  border-color: #777777;
+  transform: rotate(-45deg);
+}
+.inbox-checkbox label::after {
+  content: none;
+}
+.inbox-checkbox input[type="checkbox"] {
+  opacity: 0;
+  display: none;
+}
+.inbox-checkbox input[type="checkbox"]:checked + label::after {
+  content: "";
+}
+.inbox-icons {
+  margin: 5px 0px 5px 15px;
+  color: #636363;
+}
+.inbox-icons button {
+  background: none;
+  border: none;
+  color: white;
+  /* White text */
+  cursor: pointer;
+}
+.inbox-icons i {
+  cursor: pointer;
+  margin-right: 10px;
+}
+.create-msg-form-control {
+  width: 100%;
+  color: #555555;
+  background-color: #fff;
+  background-image: none;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.home .geonode-slide-show .jumbotron {
+  padding: 0;
+}
+.home .geonode-slide-show .jumbotron:after {
+  background-image: none;
+}
+.home .geonode-slide-show .jumbotron .container {
+  max-width: 100%;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+}
+.home .geonode-slide-show .jumbotron .container img {
+  width: 100%;
+  height: 30em;
+  object-fit: cover;
+}
+.home .geonode-slide-show .jumbotron .container .carousel-control span {
+  color: #000;
+}
+.home .geonode-slide-show .jumbotron .container .carousel-header {
+  padding-left: 1.25em;
+}
+.home .geonode-slide-show .jumbotron .container .carousel-caption h1,
+.home .geonode-slide-show .jumbotron .container h2,
+.home .geonode-slide-show .jumbotron .container h3,
+.home .geonode-slide-show .jumbotron .container h4,
+.home .geonode-slide-show .jumbotron .container h5,
+.home .geonode-slide-show .jumbotron .container h6 {
+  font-weight: 700;
+}
+.home .geonode-slide-show .jumbotron .container .carousel-caption p {
+  font-size: 1.3125em;
+  font-weight: 200;
+}
+.home .geonode-slide-show .jumbotron .container .carousel-caption {
+  background: rgba(0, 0, 0, 0.4);
+  text-align: left;
+  padding-bottom: 3em;
+  left: 0;
+  right: 0;
+  padding-left: 1.875em;
+  bottom: 0;
+}
+@media screen and (min-width: 768px) {
+  .home .geonode-slide-show .jumbotron .container .carousel-header {
+    position: absolute;
+    top: 0;
+    left: 0.625em;
+    z-index: 1;
+  }
+}
+.iso-categories .row {
+  justify-content: center;
+}
+.iso-categories .row .col-lg-1 {
+  margin-right: 1%;
+}
+.iso-categories .row .col-lg-1 .category h4 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.iso-categories .row span {
+  font-size: 0.7em !important;
+  position: absolute;
+  margin-top: 38%;
+  margin-left: 35%;
+  background-color: #2d689c;
+}
+.iso-categories .row a:hover span {
+  background-color: black;
+}
+.jumbotron .gn-container {
+  margin-top: -2px;
 }

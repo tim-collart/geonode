@@ -28,7 +28,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.core.serializers.json import DjangoJSONEncoder
 from django.views.decorators.clickjacking import xframe_options_exempt
 from django.utils.decorators import method_decorator
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.shortcuts import render
 from django.http import HttpResponse
 
@@ -42,7 +42,7 @@ from geonode.utils import default_map_config, forward_mercator, \
     llbbox_to_mercator, check_ogc_backend
 from geonode import geoserver, qgis_server
 
-import urlparse
+from urllib.parse import urlsplit
 
 if check_ogc_backend(geoserver.BACKEND_PACKAGE):
     # FIXME: The post service providing the map_status object
@@ -99,7 +99,7 @@ class MapCreateView(CreateView):
                 'preview': getattr(
                     settings,
                     'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-                    '')
+                    'leaflet')
             }
             return context
         else:
@@ -154,9 +154,9 @@ class MapCreateView(CreateView):
                         service = layer.remote_service
                         # Probably not a good idea to send the access token to every remote service.
                         # This should never match, so no access token should be sent to remote services.
-                        ogc_server_url = urlparse.urlsplit(
+                        ogc_server_url = urlsplit(
                             ogc_server_settings.PUBLIC_LOCATION).netloc
-                        service_url = urlparse.urlsplit(
+                        service_url = urlsplit(
                             service.base_url).netloc
 
                         if access_token and ogc_server_url == service_url and \
@@ -176,9 +176,9 @@ class MapCreateView(CreateView):
                                                   "name": service.name,
                                                   "title": "[R] %s" % service.title}))
                     else:
-                        ogc_server_url = urlparse.urlsplit(
+                        ogc_server_url = urlsplit(
                             ogc_server_settings.PUBLIC_LOCATION).netloc
-                        layer_url = urlparse.urlsplit(layer.ows_url).netloc
+                        layer_url = urlsplit(layer.ows_url).netloc
 
                         if access_token and ogc_server_url == layer_url and \
                                 'access_token' not in layer.ows_url:
@@ -248,7 +248,7 @@ class MapCreateView(CreateView):
                     'preview': getattr(
                         settings,
                         'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-                        '')
+                        'leaflet')
                 }
 
             else:
@@ -300,7 +300,7 @@ class MapDetailView(DetailView):
             'preview': getattr(
                 settings,
                 'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-                '')
+                'leaflet')
         }
         return context
 
@@ -338,7 +338,7 @@ class MapEmbedView(DetailView):
             'preview': getattr(
                 settings,
                 'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-                '')
+                'leaflet')
         }
         return context
 
@@ -386,7 +386,7 @@ class MapEditView(UpdateView):
             'preview': getattr(
                 settings,
                 'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-                '')
+                'leaflet')
         }
         return context
 
@@ -422,7 +422,7 @@ class MapUpdateView(UpdateView):
                                _PERMISSION_MSG_VIEW)
 
         if request.method == 'POST':
-            if not request.user.is_authenticated():
+            if not request.user.is_authenticated:
                 return self.render_to_response(
                     'You must be logged in to save new maps',
                     content_type="text/plain",
@@ -610,8 +610,7 @@ def set_thumbnail_map(request, mapid):
     bbox = _get_bbox_from_layers(layers)
 
     # Give thumbnail creation to celery tasks, and exit.
-    map_obj = Map.objects.get(id=mapid)
-    create_qgis_server_thumbnail.delay(map_obj, overwrite=True, bbox=bbox)
+    create_qgis_server_thumbnail.delay('maps.map', mapid, overwrite=True, bbox=bbox)
     retval = {
         'success': True
     }

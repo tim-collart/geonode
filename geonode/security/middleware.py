@@ -22,8 +22,9 @@ from re import compile
 
 from django.conf import settings
 from django.contrib.auth import logout
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.http import HttpResponseRedirect
+from django.utils.deprecation import MiddlewareMixin
 
 from geonode import geoserver
 from geonode.utils import check_ogc_backend
@@ -36,8 +37,6 @@ if check_ogc_backend(geoserver.BACKEND_PACKAGE):
         reverse('account_login'),
         reverse('forgot_username'),
         reverse('help'),
-        reverse('javascript-catalog'),
-        reverse('lang'),
         reverse('layer_acls'),
         reverse('layer_acls_dep'),
         reverse('layer_resolve_user'),
@@ -51,23 +50,15 @@ else:
         reverse('account_login'),
         reverse('forgot_username'),
         reverse('help'),
-        reverse('javascript-catalog'),
-        reverse('lang'),
         '/account/(?!.*(?:signup))',
         # block unauthenticated users from creating new accounts.
         '/static/*',
     )
 
-white_list = map(
-    compile,
-    white_list_paths +
-    getattr(
-        settings,
-        "AUTH_EXEMPT_URLS",
-        ()))
+white_list = [compile(x) for x in white_list_paths + getattr(settings, "AUTH_EXEMPT_URLS", ())]
 
 
-class LoginRequiredMiddleware(object):
+class LoginRequiredMiddleware(MiddlewareMixin):
 
     """
     Requires a user to be logged in to access any page that is not white-listed.
@@ -75,9 +66,12 @@ class LoginRequiredMiddleware(object):
 
     redirect_to = getattr(settings, 'LOGIN_URL', reverse('account_login'))
 
+    def __init__(self, get_response):
+        self.get_response = get_response
+
     def process_request(self, request):
-        if not request.user.is_authenticated(
-        ) or request.user == get_anonymous_user():
+        if not request.user.is_authenticated or \
+        request.user == get_anonymous_user():
             if not any(path.match(request.path) for path in white_list):
                 return HttpResponseRedirect(
                     '{login_path}?next={request_path}'.format(
@@ -85,12 +79,15 @@ class LoginRequiredMiddleware(object):
                         request_path=request.path))
 
 
-class SessionControlMiddleware(object):
+class SessionControlMiddleware(MiddlewareMixin):
     """
     Middleware that checks if session variables have been correctly set.
     """
 
     redirect_to = getattr(settings, 'LOGIN_URL', reverse('account_login'))
+
+    def __init__(self, get_response):
+        self.get_response = get_response
 
     def process_request(self, request):
         if request and request.user and not request.user.is_anonymous:
@@ -99,7 +96,7 @@ class SessionControlMiddleware(object):
             elif check_ogc_backend(geoserver.BACKEND_PACKAGE):
                 try:
                     access_token = get_token_object_from_session(request.session)
-                except BaseException:
+                except Exception:
                     access_token = None
                     self.do_logout(request)
 
@@ -110,14 +107,12 @@ class SessionControlMiddleware(object):
     def do_logout(self, request):
         try:
             logout(request)
-        except BaseException:
-            pass
         finally:
             try:
                 from django.contrib import messages
                 from django.utils.translation import ugettext_noop as _
                 messages.warning(request, _("Session is Expired. Please login again!"))
-            except BaseException:
+            except Exception:
                 pass
 
             if not any(path.match(request.path) for path in white_list):

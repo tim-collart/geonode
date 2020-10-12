@@ -1,7 +1,7 @@
 FROM openjdk:8-jre-alpine
 
-ARG version=2.15.3
-ARG branch=2.15.3
+ARG version=2.17.2
+ARG branch=2.17.2
 ARG plugins=
 
 # Install dependencies
@@ -18,7 +18,8 @@ WORKDIR /
 RUN echo "Download geoserver for geonode" && \
     wget https://downloads.sourceforge.net/project/geoserver/GeoServer/$version/geoserver-$version-bin.zip && \
     wget https://build.geo-solutions.it/geonode/geoserver/latest/geoserver-$branch.war --no-check-certificate && \
-    unzip geoserver-$version-bin.zip && \
+    mkdir -p geoserver-$version && \
+    unzip geoserver-$version-bin.zip -d geoserver-$version && \
     mv geoserver-$version geoserver && \
     rm /geoserver-$version-bin.zip && \
     rm /geoserver-$version/webapps/geoserver/* -rf && \
@@ -52,6 +53,7 @@ EXPOSE 8080
 # Set environnment variables
 ENV GEOSERVER_HOME=/geoserver
 ENV GEOSERVER_DATA_DIR=/spcgeonode-geodatadir
+ENV GEOSERVER_CSRF_DISABLED=true
 
 # Run geoserver
 CMD ["bin/startup.sh"]

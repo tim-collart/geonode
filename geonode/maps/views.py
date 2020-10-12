@@ -20,15 +20,17 @@
 
 import math
 import logging
-import urlparse
+import six
+from urllib.parse import quote, urlsplit
 import traceback
 from itertools import chain
+from six import string_types
 
 from guardian.shortcuts import get_perms
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ObjectDoesNotExist
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.shortcuts import redirect
 from django.core.serializers.json import DjangoJSONEncoder
 from django.http import HttpResponse, HttpResponseRedirect, HttpResponseNotAllowed, HttpResponseServerError, Http404
@@ -37,16 +39,12 @@ from django.conf import settings
 from django.utils.translation import ugettext as _
 from django.views.decorators.http import require_http_methods
 
-try:
-    # Django >= 1.7
-    import json
-except ImportError:
-    # Django <= 1.6 backwards compatibility
-    from django.utils import simplejson as json
+import json
 from django.utils.html import strip_tags
 from django.db.models import F
 from django.views.decorators.clickjacking import (xframe_options_exempt,
                                                   xframe_options_sameorigin)
+from geonode.decorators import check_keyword_write_perms
 from geonode.layers.models import Layer
 from geonode.maps.models import Map, MapLayer, MapSnapshot
 from geonode.layers.views import _resolve_layer
@@ -70,6 +68,7 @@ from geonode.base.models import (
     TopicCategory)
 from geonode import geoserver, qgis_server
 from geonode.groups.models import GroupProfile
+from geonode.base.auth import get_or_create_token
 from geonode.documents.models import get_related_documents
 from geonode.people.forms import ProfileForm
 from geonode.base.views import batch_modify
@@ -78,6 +77,10 @@ from geonode.monitoring import register_event
 from geonode.monitoring.models import EventType
 from requests.compat import urljoin
 from deprecated import deprecated
+
+from dal import autocomplete
+
+from geonode.base.utils import ManageResourceOwnerPermissions
 
 if check_ogc_backend(geoserver.BACKEND_PACKAGE):
     # FIXME: The post service providing the map_status object
@@ -94,13 +97,13 @@ DEFAULT_MAPS_SEARCH_BATCH_SIZE = 10
 MAX_MAPS_SEARCH_BATCH_SIZE = 25
 
 _PERMISSION_MSG_DELETE = _("You are not permitted to delete this map.")
-_PERMISSION_MSG_GENERIC = _('You do not have permissions for this map.')
+_PERMISSION_MSG_GENERIC = _("You do not have permissions for this map.")
 _PERMISSION_MSG_LOGIN = _("You must be logged in to save this map")
 _PERMISSION_MSG_SAVE = _("You are not permitted to save or edit this map.")
 _PERMISSION_MSG_METADATA = _(
     "You are not allowed to modify this map's metadata.")
 _PERMISSION_MSG_VIEW = _("You are not allowed to view this map.")
-_PERMISSION_MSG_UNKNOWN = _('An unknown error has occured.')
+_PERMISSION_MSG_UNKNOWN = _("An unknown error has occured.")
 
 
 def _resolve_map(request, id, permission='base.change_resourcebase',
@@ -128,6 +131,12 @@ def map_detail(request, mapid, snapshot=None, template='maps/map_detail.html'):
         'base.view_resourcebase',
         _PERMISSION_MSG_VIEW)
 
+    permission_manager = ManageResourceOwnerPermissions(map_obj)
+    permission_manager.set_owner_permissions_according_to_workflow()
+
+    # Add metadata_author or poc if missing
+    map_obj.add_missing_metadata_author_or_poc()
+
     # Update count for popularity ranking,
     # but do not includes admins or resource owners
     if request.user != map_obj.owner and not request.user.is_superuser:
@@ -146,27 +155,42 @@ def map_detail(request, mapid, snapshot=None, template='maps/map_detail.html'):
     layers = MapLayer.objects.filter(map=map_obj.id)
     links = map_obj.link_set.download()
 
+    # Call this first in order to be sure "perms_list" is correct
+    permissions_json = _perms_info_json(map_obj)
+
+    perms_list = get_perms(
+        request.user,
+        map_obj.get_self_resource()) + get_perms(request.user, map_obj)
+
     group = None
     if map_obj.group:
         try:
             group = GroupProfile.objects.get(slug=map_obj.group.name)
         except GroupProfile.DoesNotExist:
             group = None
+
+    access_token = None
+    if request and request.user:
+        access_token = get_or_create_token(request.user)
+        if access_token and not access_token.is_expired():
+            access_token = access_token.token
+        else:
+            access_token = None
+
     context_dict = {
+        'access_token': access_token,
         'config': config,
         'resource': map_obj,
         'group': group,
         'layers': layers,
-        'perms_list': get_perms(
-            request.user,
-            map_obj.get_self_resource()) + get_perms(request.user, map_obj),
-        'permissions_json': _perms_info_json(map_obj),
+        'perms_list': perms_list,
+        'permissions_json': permissions_json,
         "documents": get_related_documents(map_obj),
         'links': links,
         'preview': getattr(
             settings,
             'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-            'geoext'),
+            'mapstore'),
         'crs': getattr(
             settings,
             'DEFAULT_MAP_CRS',
@@ -176,7 +200,7 @@ def map_detail(request, mapid, snapshot=None, template='maps/map_detail.html'):
     if settings.SOCIAL_ORIGINS:
         context_dict["social_links"] = build_social_links(request, map_obj)
 
-    if request.user.is_authenticated():
+    if request.user.is_authenticated:
         if getattr(settings, 'FAVORITE_ENABLED', False):
             from geonode.favorite.utils import get_favorite_info
             context_dict["favorite_info"] = get_favorite_info(request.user, map_obj)
@@ -187,6 +211,7 @@ def map_detail(request, mapid, snapshot=None, template='maps/map_detail.html'):
 
 
 @login_required
+@check_keyword_write_perms
 def map_metadata(
         request,
         mapid,
@@ -198,6 +223,9 @@ def map_metadata(
         'base.change_resourcebase_metadata',
         _PERMISSION_MSG_VIEW)
 
+    # Add metadata_author or poc if missing
+    map_obj.add_missing_metadata_author_or_poc()
+    current_keywords = [keyword.name for keyword in map_obj.keywords.all()]
     poc = map_obj.poc
 
     metadata_author = map_obj.metadata_author
@@ -209,11 +237,10 @@ def map_metadata(
         category_form = CategoryForm(request.POST, prefix="category_choice_field", initial=int(
             request.POST["category_choice_field"]) if "category_choice_field" in request.POST and
             request.POST["category_choice_field"] else None)
-        tkeywords_form = TKeywordForm(
-            prefix="tkeywords",
-            initial={'tkeywords': request.POST.getlist('tkeywords-tkeywords')})
+        tkeywords_form = TKeywordForm(request.POST)
     else:
         map_form = MapForm(instance=map_obj, prefix="resource")
+        map_form.disable_keywords_widget_for_non_superuser(request.user)
         category_form = CategoryForm(
             prefix="category_choice_field",
             initial=topic_category.id if topic_category else None)
@@ -237,26 +264,24 @@ def map_metadata(
                             tkeywords_list += "," + \
                                 tkl_ids if len(
                                     tkeywords_list) > 0 else tkl_ids
-                except BaseException:
+                except Exception:
                     tb = traceback.format_exc()
                     logger.error(tb)
 
-        tkeywords_form = TKeywordForm(
-            prefix="tkeywords",
-            initial={'tkeywords': tkeywords_list})
+        tkeywords_form = TKeywordForm(instance=map_obj)
 
     if request.method == "POST" and map_form.is_valid(
     ) and category_form.is_valid():
         new_poc = map_form.cleaned_data['poc']
         new_author = map_form.cleaned_data['metadata_author']
-        new_keywords = map_form.cleaned_data['keywords']
+        new_keywords = current_keywords if request.keyword_readonly else map_form.cleaned_data['keywords']
         new_regions = map_form.cleaned_data['regions']
         new_title = strip_tags(map_form.cleaned_data['title'])
         new_abstract = strip_tags(map_form.cleaned_data['abstract'])
 
         new_category = None
         if category_form and 'category_choice_field' in category_form.cleaned_data and\
-        category_form.cleaned_data['category_choice_field']:
+                category_form.cleaned_data['category_choice_field']:
             new_category = TopicCategory.objects.get(
                 id=int(category_form.cleaned_data['category_choice_field']))
 
@@ -290,7 +315,7 @@ def map_metadata(
         map_obj.regions.clear()
         map_obj.regions.add(*new_regions)
         map_obj.category = new_category
-        map_obj.save()
+        map_obj.save(notify=True)
 
         register_event(request, EventType.EVENT_CHANGE_METADATA, map_obj)
         if not ajax:
@@ -305,34 +330,19 @@ def map_metadata(
 
         try:
             # Keywords from THESAURUS management
-            tkeywords_to_add = []
-            tkeywords_cleaned = tkeywords_form.clean()
-            if tkeywords_cleaned and len(tkeywords_cleaned) > 0:
-                tkeywords_ids = []
-                for i, val in enumerate(tkeywords_cleaned):
-                    try:
-                        cleaned_data = [value for key, value in tkeywords_cleaned[i].items(
-                        ) if 'tkeywords' in key.lower() and 'autocomplete' not in key.lower()]
-                        tkeywords_ids.extend(map(int, cleaned_data[0]))
-                    except BaseException:
-                        pass
+            # Rewritten to work with updated autocomplete
+            if not tkeywords_form.is_valid():
+                return HttpResponse(json.dumps({'message': "Invalid thesaurus keywords"}, status_code=400))
 
-                if hasattr(settings, 'THESAURUS') and settings.THESAURUS:
-                    el = settings.THESAURUS
-                    thesaurus_name = el['name']
-                    try:
-                        t = Thesaurus.objects.get(
-                            identifier=thesaurus_name)
-                        for tk in t.thesaurus.all():
-                            tkl = tk.keyword.filter(pk__in=tkeywords_ids)
-                            if len(tkl) > 0:
-                                tkeywords_to_add.append(tkl[0].keyword_id)
-                        map_obj.tkeywords.clear()
-                        map_obj.tkeywords.add(*tkeywords_to_add)
-                    except BaseException:
-                        tb = traceback.format_exc()
-                        logger.error(tb)
-        except BaseException:
+            tkeywords_data = tkeywords_form.cleaned_data['tkeywords']
+
+            thesaurus_setting = getattr(settings, 'THESAURUS', None)
+            if thesaurus_setting:
+                tkeywords_data = tkeywords_data.filter(
+                    thesaurus__identifier=thesaurus_setting['name']
+                )
+                map_obj.tkeywords.set(tkeywords_data)
+        except Exception:
             tb = traceback.format_exc()
             logger.error(tb)
 
@@ -344,24 +354,16 @@ def map_metadata(
     if poc is None:
         poc_form = ProfileForm(request.POST, prefix="poc")
     else:
-        if poc is None:
-            poc_form = ProfileForm(instance=poc, prefix="poc")
-        else:
-            map_form.fields['poc'].initial = poc.id
-            poc_form = ProfileForm(prefix="poc")
-            poc_form.hidden = True
+        map_form.fields['poc'].initial = poc.id
+        poc_form = ProfileForm(prefix="poc")
+        poc_form.hidden = True
 
     if metadata_author is None:
         author_form = ProfileForm(request.POST, prefix="author")
     else:
-        if metadata_author is None:
-            author_form = ProfileForm(
-                instance=metadata_author,
-                prefix="author")
-        else:
-            map_form.fields['metadata_author'].initial = metadata_author.id
-            author_form = ProfileForm(prefix="author")
-            author_form.hidden = True
+        map_form.fields['metadata_author'].initial = metadata_author.id
+        author_form = ProfileForm(prefix="author")
+        author_form.hidden = True
 
     config = map_obj.viewer_json(request)
     layers = MapLayer.objects.filter(map=map_obj.id)
@@ -375,7 +377,7 @@ def map_metadata(
                 request.user.group_list_all(),
                 GroupProfile.objects.exclude(
                     access="private").exclude(access="public-invite"))
-        except BaseException:
+        except Exception:
             all_metadata_author_groups = GroupProfile.objects.exclude(
                 access="private").exclude(access="public-invite")
         [metadata_author_groups.append(item) for item in all_metadata_author_groups
@@ -383,15 +385,16 @@ def map_metadata(
 
     if settings.ADMIN_MODERATE_UPLOADS:
         if not request.user.is_superuser:
-            map_form.fields['is_published'].widget.attrs.update(
-                {'disabled': 'true'})
+            if settings.RESOURCE_PUBLISHING:
+                map_form.fields['is_published'].widget.attrs.update(
+                    {'disabled': 'true'})
 
             can_change_metadata = request.user.has_perm(
                 'change_resourcebase_metadata',
                 map_obj.get_self_resource())
             try:
                 is_manager = request.user.groupmember_set.all().filter(role='manager').exists()
-            except BaseException:
+            except Exception:
                 is_manager = False
             if not is_manager or not can_change_metadata:
                 map_form.fields['is_approved'].widget.attrs.update(
@@ -408,7 +411,7 @@ def map_metadata(
         "category_form": category_form,
         "tkeywords_form": tkeywords_form,
         "layers": layers,
-        "preview": getattr(settings, 'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY', 'geoext'),
+        "preview": getattr(settings, 'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY', 'mapstore'),
         "crs": getattr(settings, 'DEFAULT_MAP_CRS', 'EPSG:3857'),
         "metadata_author_groups": metadata_author_groups,
         "TOPICCATEGORY_MANDATORY": getattr(settings, 'TOPICCATEGORY_MANDATORY', False),
@@ -443,18 +446,22 @@ def map_remove(request, mapid, template='maps/map_remove.html'):
             try:
                 from geonode.contrib.slack.utils import build_slack_message_map
                 slack_message = build_slack_message_map("map_delete", map_obj)
-            except BaseException:
+            except Exception:
                 logger.error("Could not build slack message for delete map.")
 
-            delete_map.delay(object_id=map_obj.id)
+            result = delete_map.delay(object_id=map_obj.id)
+            # Attempt to run task synchronously
+            result.get()
 
             try:
                 from geonode.contrib.slack.utils import send_slack_messages
                 send_slack_messages(slack_message)
-            except BaseException:
+            except Exception:
                 logger.error("Could not send slack message for delete map.")
         else:
-            delete_map.delay(object_id=map_obj.id)
+            result = delete_map.delay(object_id=map_obj.id)
+            # Attempt to run task synchronously
+            result.get()
 
         register_event(request, EventType.EVENT_REMOVE, map_obj)
 
@@ -546,14 +553,14 @@ def map_embed_widget(request, mapid,
         if valid_x:
             try:
                 width_zoom = math.log(360 / abs(maxx - minx), 2)
-            except BaseException:
+            except Exception:
                 pass
 
         height_zoom = 15
         if valid_y:
             try:
                 height_zoom = math.log(360 / abs(maxy - miny), 2)
-            except BaseException:
+            except Exception:
                 pass
 
         map_obj.center_x = center[0]
@@ -620,7 +627,7 @@ def map_view(request, mapid, snapshot=None, layer_name=None,
         'preview': getattr(
             settings,
             'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-            'geoext')
+            'mapstore')
     })
 
 
@@ -649,7 +656,7 @@ def map_json(request, mapid, snapshot=None):
             json.dumps(
                 map_obj.viewer_json(request)))
     elif request.method == 'PUT':
-        if not request.user.is_authenticated():
+        if not request.user.is_authenticated:
             return HttpResponse(
                 _PERMISSION_MSG_LOGIN,
                 status=401,
@@ -710,7 +717,7 @@ def map_edit(request, mapid, snapshot=None, template='maps/map_edit.html'):
         'preview': getattr(
             settings,
             'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-            'geoext')
+            'mapstore')
     })
 
 
@@ -718,7 +725,7 @@ def map_edit(request, mapid, snapshot=None, template='maps/map_edit.html'):
 
 
 def clean_config(conf):
-    if isinstance(conf, basestring):
+    if isinstance(conf, string_types):
         config = json.loads(conf)
         config_extras = [
             "tools",
@@ -748,7 +755,7 @@ def new_map(request, template='maps/map_new.html'):
     context_dict["preview"] = getattr(
         settings,
         'GEONODE_CLIENT_LAYER_PREVIEW_LIBRARY',
-        'geoext')
+        'mapstore')
     if isinstance(config, HttpResponse):
         return config
     else:
@@ -766,7 +773,7 @@ def new_map_json(request):
         else:
             return HttpResponse(config)
     elif request.method == 'POST':
-        if not request.user.is_authenticated():
+        if not request.user.is_authenticated:
             return HttpResponse(
                 'You must be logged in to save new maps',
                 content_type="text/plain",
@@ -824,11 +831,10 @@ def new_map_config(request):
 
         map_obj.abstract = DEFAULT_ABSTRACT
         map_obj.title = DEFAULT_TITLE
-        if request.user.is_authenticated():
+        if request.user.is_authenticated:
             map_obj.owner = request.user
 
         config = map_obj.viewer_json(request)
-        map_obj.handle_moderated_uploads()
         del config['id']
     else:
         if request.method == 'GET':
@@ -845,6 +851,8 @@ def new_map_config(request):
                 request, map_obj, params.getlist('layer'))
         else:
             config = DEFAULT_MAP_CONFIG
+    if map_obj:
+        map_obj.handle_moderated_uploads()
     return map_obj, json.dumps(config)
 
 
@@ -889,7 +897,6 @@ def add_layers_to_map_config(
             return [_bbox[0], _bbox[2], _bbox[1], _bbox[3]]
 
         def sld_definition(style):
-            from urllib import quote
             _sld = {
                 "title": style.sld_title or style.name,
                 "legend": {
@@ -985,45 +992,45 @@ def add_layers_to_map_config(
 
         all_times = None
         if check_ogc_backend(geoserver.BACKEND_PACKAGE):
-            from geonode.geoserver.views import get_capabilities
-            workspace, layername = layer.alternate.split(
-                ":") if ":" in layer.alternate else (None, layer.alternate)
-            # WARNING Please make sure to have enabled DJANGO CACHE as per
-            # https://docs.djangoproject.com/en/2.0/topics/cache/#filesystem-caching
-            wms_capabilities_resp = get_capabilities(
-                request, layer.id, tolerant=True)
-            if wms_capabilities_resp.status_code >= 200 and wms_capabilities_resp.status_code < 400:
-                wms_capabilities = wms_capabilities_resp.getvalue()
-                if wms_capabilities:
-                    from defusedxml import lxml as dlxml
-                    namespaces = {'wms': 'http://www.opengis.net/wms',
-                                  'xlink': 'http://www.w3.org/1999/xlink',
-                                  'xsi': 'http://www.w3.org/2001/XMLSchema-instance'}
-
-                    e = dlxml.fromstring(wms_capabilities)
-                    for atype in e.findall(
-                            "./[wms:Name='%s']/wms:Dimension[@name='time']" % (layer.alternate), namespaces):
-                        dim_name = atype.get('name')
-                        if dim_name:
-                            dim_name = str(dim_name).lower()
-                            if dim_name == 'time':
-                                dim_values = atype.text
-                                if dim_values:
-                                    all_times = dim_values.split(",")
-                                    break
-            if all_times:
-                config["capability"]["dimensions"] = {
-                    "time": {
-                        "name": "time",
-                        "units": "ISO8601",
-                        "unitsymbol": None,
-                        "nearestVal": False,
-                        "multipleVal": False,
-                        "current": False,
-                        "default": "current",
-                        "values": all_times
+            if layer.has_time:
+                from geonode.geoserver.views import get_capabilities
+                workspace, layername = layer.alternate.split(
+                    ":") if ":" in layer.alternate else (None, layer.alternate)
+                # WARNING Please make sure to have enabled DJANGO CACHE as per
+                # https://docs.djangoproject.com/en/2.0/topics/cache/#filesystem-caching
+                wms_capabilities_resp = get_capabilities(
+                    request, layer.id, tolerant=True)
+                if wms_capabilities_resp.status_code >= 200 and wms_capabilities_resp.status_code < 400:
+                    wms_capabilities = wms_capabilities_resp.getvalue()
+                    if wms_capabilities:
+                        from defusedxml import lxml as dlxml
+                        namespaces = {'wms': 'http://www.opengis.net/wms',
+                                      'xlink': 'http://www.w3.org/1999/xlink',
+                                      'xsi': 'http://www.w3.org/2001/XMLSchema-instance'}
+                        e = dlxml.fromstring(wms_capabilities)
+                        for atype in e.findall(
+                                "./[wms:Name='%s']/wms:Dimension[@name='time']" % (layer.alternate), namespaces):
+                            dim_name = atype.get('name')
+                            if dim_name:
+                                dim_name = str(dim_name).lower()
+                                if dim_name == 'time':
+                                    dim_values = atype.text
+                                    if dim_values:
+                                        all_times = dim_values.split(",")
+                                        break
+                if all_times:
+                    config["capability"]["dimensions"] = {
+                        "time": {
+                            "name": "time",
+                            "units": "ISO8601",
+                            "unitsymbol": None,
+                            "nearestVal": False,
+                            "multipleVal": False,
+                            "current": False,
+                            "default": "current",
+                            "values": all_times
+                        }
                     }
-                }
 
         if layer.storeType == "remoteStore":
             service = layer.remote_service
@@ -1043,9 +1050,9 @@ def add_layers_to_map_config(
                                 source_params=json.dumps(source_params)
                                 )
         else:
-            ogc_server_url = urlparse.urlsplit(
+            ogc_server_url = urlsplit(
                 ogc_server_settings.PUBLIC_LOCATION).netloc
-            layer_url = urlparse.urlsplit(layer.ows_url).netloc
+            layer_url = urlsplit(layer.ows_url).netloc
 
             access_token = request.session['access_token'] if request and 'access_token' in request.session else None
             if access_token and ogc_server_url == layer_url and 'access_token' not in layer.ows_url:
@@ -1241,7 +1248,7 @@ def map_wms(request, mapid):
             return HttpResponse(
                 json.dumps(response),
                 content_type="application/json")
-        except BaseException:
+        except Exception:
             return HttpResponseServerError()
 
     if request.method == 'GET':
@@ -1273,7 +1280,7 @@ def snapshot_config(snapshot, map_obj, request):
 
     # Match up the layer with it's source
     def snapsource_lookup(source, sources):
-        for k, v in sources.iteritems():
+        for k, v in sources.items():
             if v.get("id") == source.get("id"):
                 return k
         return None
@@ -1365,7 +1372,7 @@ def snapshot_create(request):
     """
     conf = request.body
 
-    if isinstance(conf, basestring):
+    if isinstance(conf, string_types):
         config = json.loads(conf)
         snapshot = MapSnapshot.objects.create(
             config=clean_config(conf),
@@ -1427,7 +1434,7 @@ def map_thumbnail(request, mapid):
         try:
             image = _prepare_thumbnail_body_from_opts(
                 request.body, request=request)
-        except BaseException:
+        except Exception:
             image = _render_thumbnail(request.body)
 
         if not image:
@@ -1440,7 +1447,7 @@ def map_thumbnail(request, mapid):
         map_obj.save_thumbnail(filename, image)
 
         return HttpResponse(_('Thumbnail saved'))
-    except BaseException:
+    except Exception:
         return HttpResponse(
             content=_('error saving thumbnail'),
             status=500,
@@ -1471,3 +1478,23 @@ def map_metadata_detail(
 @login_required
 def map_batch_metadata(request, ids):
     return batch_modify(request, ids, 'Map')
+
+
+class MapAutocomplete(autocomplete.Select2QuerySetView):
+
+    # Overriding both result label methods to ensure autocomplete labels display without ' by user' suffix
+    def get_selected_result_label(self, result):
+        """Return the label of a selected result."""
+        return self.get_result_label(result)
+
+    def get_result_label(self, result):
+        """Return the label of a selected result."""
+        return six.text_type(result.title)
+
+    def get_queryset(self):
+        qs = Map.objects.all()
+
+        if self.q:
+            qs = qs.filter(title__icontains=self.q).order_by('title')[:100]
+
+        return qs

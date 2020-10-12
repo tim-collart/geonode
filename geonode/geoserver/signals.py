@@ -17,36 +17,40 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 #########################################################################
-
 import errno
 import logging
+import geoserver
+
 from time import sleep
+from requests.exceptions import ConnectionError
+from geoserver.layer import Layer as GsLayer
+
 from django.conf import settings
 from django.forms.models import model_to_dict
+from django.contrib.auth import get_user_model
 
 # use different name to avoid module clash
-from . import BACKEND_PACKAGE
 from geonode import GeoNodeException
-from geonode.utils import set_resource_default_links
+from geonode.utils import (
+    set_resource_default_links,
+    json_serializer_producer)
 from geonode.decorators import on_ogc_backend
 from geonode.geoserver.upload import geoserver_upload
-from geonode.geoserver.helpers import (cascading_delete,
-                                       set_attributes_from_geoserver,
-                                       set_styles,
-                                       gs_catalog,
-                                       ogc_server_settings,
-                                       create_gs_thumbnail,
-                                       _stylefilterparams_geowebcache_layer,
-                                       _invalidate_geowebcache_layer)
+from geonode.geoserver.helpers import (
+    set_attributes_from_geoserver,
+    set_styles,
+    gs_catalog,
+    ogc_server_settings,
+    create_gs_thumbnail,
+    _stylefilterparams_geowebcache_layer,
+    _invalidate_geowebcache_layer)
 from geonode.catalogue.models import catalogue_post_save
 from geonode.base.models import ResourceBase
-from geonode.people.models import Profile
 from geonode.layers.models import Layer
-from geonode.social.signals import json_serializer_producer
 from geonode.services.enumerations import CASCADED
 
-import geoserver
-from geoserver.layer import Layer as GsLayer
+from . import BACKEND_PACKAGE
+from .tasks import geoserver_cascading_delete
 
 logger = logging.getLogger("geonode.geoserver.signals")
 
@@ -55,7 +59,10 @@ def geoserver_delete(typename):
     # cascading_delete should only be called if
     # ogc_server_settings.BACKEND_WRITE_ENABLED == True
     if getattr(ogc_server_settings, "BACKEND_WRITE_ENABLED", True):
-        cascading_delete(gs_catalog, typename)
+        try:
+            geoserver_cascading_delete.delay(layer_name=typename)
+        except ConnectionError as e:
+            logger.error(e)
 
 
 @on_ogc_backend(BACKEND_PACKAGE)
@@ -67,7 +74,10 @@ def geoserver_pre_delete(instance, sender, **kwargs):
     if getattr(ogc_server_settings, "BACKEND_WRITE_ENABLED", True):
         if instance.remote_service is None or instance.remote_service.method == CASCADED:
             if instance.alternate:
-                cascading_delete(gs_catalog, instance.alternate)
+                try:
+                    geoserver_cascading_delete.delay(layer_name=instance.alternate)
+                except ConnectionError as e:
+                    logger.error(e)
 
 
 @on_ogc_backend(BACKEND_PACKAGE)
@@ -84,8 +94,10 @@ def geoserver_post_save(instance, sender, created, **kwargs):
     if isinstance(instance, Layer):
         instance_dict = model_to_dict(instance)
         payload = json_serializer_producer(instance_dict)
-        producer.geoserver_upload_layer(payload)
-
+        try:
+            producer.geoserver_upload_layer(payload)
+        except Exception as e:
+            logger.error(e)
         if getattr(settings, 'DELAYED_SECURITY_SIGNALS', False):
             instance.set_dirty_state()
 
@@ -103,12 +115,6 @@ def geoserver_post_save_local(instance, *args, **kwargs):
         * Metadata Links,
         * Point of Contact name and url
     """
-    try:
-        instance.refresh_from_db()
-    except BaseException:
-        from django.db import connection
-        connection._rollback()
-
     instance.refresh_from_db()
 
     # Don't run this signal if is a Layer from a remote service
@@ -123,14 +129,14 @@ def geoserver_post_save_local(instance, *args, **kwargs):
     gs_resource = None
     values = None
     _tries = 0
-    _max_tries = getattr(ogc_server_settings, "MAX_RETRIES", 5)
+    _max_tries = getattr(ogc_server_settings, "MAX_RETRIES", 2)
 
     # If the store in None then it's a new instance from an upload,
     # only in this case run the geoserver_upload method
     if not instance.store or getattr(instance, 'overwrite', False):
         base_file, info = instance.get_base_file()
 
-        # There is no need to process it if there is not file.
+        # There is no need to process it if there is no file.
         if base_file is None:
             return
         gs_name, workspace, values, gs_resource = geoserver_upload(instance,
@@ -149,17 +155,17 @@ def geoserver_post_save_local(instance, *args, **kwargs):
                 name=instance.name,
                 store=instance.store,
                 workspace=instance.workspace)
-        except BaseException:
+        except Exception:
             try:
                 gs_resource = gs_catalog.get_resource(
                     name=instance.alternate,
                     store=instance.store,
                     workspace=instance.workspace)
-            except BaseException:
+            except Exception:
                 try:
                     gs_resource = gs_catalog.get_resource(
                         name=instance.alternate or instance.typename)
-                except BaseException:
+                except Exception:
                     gs_resource = None
 
         if gs_resource:
@@ -195,7 +201,7 @@ def geoserver_post_save_local(instance, *args, **kwargs):
         metadata_links.append((link.mime, link.name, link.url))
 
     if gs_resource:
-        logger.info("Found geoserver resource for this layer: %s" % instance.name)
+        logger.debug("Found geoserver resource for this layer: %s" % instance.name)
         gs_resource.metadata_links = metadata_links
         # gs_resource should only be called if
         # ogc_server_settings.BACKEND_WRITE_ENABLED == True
@@ -217,7 +223,7 @@ def geoserver_post_save_local(instance, *args, **kwargs):
                                        'href': None,
                                        'url': None,
                                        'type': None}
-            profile = Profile.objects.get(username=instance.poc.username)
+            profile = get_user_model().objects.get(username=instance.poc.username)
             site_url = settings.SITEURL.rstrip('/') if settings.SITEURL.startswith('http') else settings.SITEURL
             gs_resource.attribution_link = site_url + profile.get_absolute_url()
             # gs_resource should only be called if
@@ -250,7 +256,7 @@ def geoserver_post_save_local(instance, *args, **kwargs):
     try:
         _stylefilterparams_geowebcache_layer(instance.alternate)
         _invalidate_geowebcache_layer(instance.alternate)
-    except BaseException:
+    except Exception:
         pass
 
     if instance.storeType == "remoteStore":
@@ -266,9 +272,11 @@ def geoserver_post_save_local(instance, *args, **kwargs):
            * Download links (WMS, WCS or WFS and KML)
            * Styles (SLD)
         """
-        # instance.name = instance.name or gs_resource.name
-        # instance.title = instance.title or gs_resource.title
-        instance.abstract = gs_resource.abstract or ''
+        try:
+            instance.abstract = gs_resource.abstract or ''
+        except Exception as e:
+            logger.exception(e)
+            instance.abstract = ''
         instance.workspace = gs_resource.store.workspace.name
         instance.store = gs_resource.store.name
 
@@ -281,8 +289,8 @@ def geoserver_post_save_local(instance, *args, **kwargs):
             instance.bbox_y0 = bbox[2]
             instance.bbox_y1 = bbox[3]
             instance.srid = bbox[4]
-        except BaseException:
-            pass
+        except Exception as e:
+            logger.exception(e)
 
     if instance.srid:
         instance.srid_url = "http://www.spatialreference.org/ref/" + \
@@ -301,24 +309,20 @@ def geoserver_post_save_local(instance, *args, **kwargs):
             setattr(instance, key, values[key])
 
     if gs_resource:
-        if settings.RESOURCE_PUBLISHING:
-            if instance.is_published != gs_resource.advertised:
-                if getattr(ogc_server_settings, "BACKEND_WRITE_ENABLED", True):
-                    gs_resource.advertised = 'true'
-                    gs_catalog.save(gs_resource)
+        try:
+            if settings.RESOURCE_PUBLISHING:
+                if instance.is_published != gs_resource.advertised:
+                    if getattr(ogc_server_settings, "BACKEND_WRITE_ENABLED", True):
+                        gs_resource.advertised = 'true'
+                        gs_catalog.save(gs_resource)
 
-        if not settings.FREETEXT_KEYWORDS_READONLY:
-            try:
+            if not settings.FREETEXT_KEYWORDS_READONLY:
                 # AF: Warning - this won't allow people to have empty keywords on GeoNode
                 if len(instance.keyword_list()) == 0 and gs_resource.keywords:
                     for keyword in gs_resource.keywords:
                         if keyword not in instance.keyword_list():
                             instance.keywords.add(keyword)
-            except BaseException:
-                from django.db import connection
-                connection._rollback()
 
-        try:
             if any(instance.keyword_list()):
                 keywords = instance.keyword_list()
                 gs_resource.keywords = [kw for kw in list(set(keywords))]
@@ -326,16 +330,12 @@ def geoserver_post_save_local(instance, *args, **kwargs):
                 # gs_resource should only be called if
                 # ogc_server_settings.BACKEND_WRITE_ENABLED == True
                 if getattr(ogc_server_settings, "BACKEND_WRITE_ENABLED", True):
-                    try:
-                        gs_catalog.save(gs_resource)
-                    except geoserver.catalog.FailedRequestError as e:
-                        msg = ('Error while trying to save resource named %s in GeoServer, '
-                               'try to use: "%s"' % (gs_resource, str(e)))
-                        e.args = (msg,)
-                        logger.exception(e)
-        except BaseException:
-            from django.db import connection
-            connection._rollback()
+                    gs_catalog.save(gs_resource)
+        except Exception as e:
+            msg = ('Error while trying to save resource named %s in GeoServer, '
+                   'try to use: "%s"' % (gs_resource, str(e)))
+            e.args = (msg,)
+            logger.exception(e)
 
     to_update = {
         'title': instance.title or instance.name,
@@ -349,12 +349,8 @@ def geoserver_post_save_local(instance, *args, **kwargs):
     }
 
     # Update ResourceBase
-    try:
-        resources = ResourceBase.objects.filter(id=instance.resourcebase_ptr.id)
-        resources.update(**to_update)
-    except BaseException:
-        from django.db import connection
-        connection._rollback()
+    resources = ResourceBase.objects.filter(id=instance.resourcebase_ptr.id)
+    resources.update(**to_update)
 
     # to_update['name'] = instance.name,
     to_update['workspace'] = instance.workspace
@@ -363,25 +359,13 @@ def geoserver_post_save_local(instance, *args, **kwargs):
     to_update['typename'] = instance.alternate
 
     # Save all the modified information in the instance without triggering signals.
-    try:
-        Layer.objects.filter(id=instance.id).update(**to_update)
-    except BaseException:
-        from django.db import connection
-        connection._rollback()
+    Layer.objects.filter(id=instance.id).update(**to_update)
 
     # Refresh from DB
-    try:
-        instance.refresh_from_db()
-    except BaseException:
-        from django.db import connection
-        connection._rollback()
+    instance.refresh_from_db()
 
     # Updating the Catalogue
-    try:
-        catalogue_post_save(instance=instance, sender=instance.__class__)
-    except BaseException:
-        from django.db import connection
-        connection._rollback()
+    catalogue_post_save(instance=instance, sender=instance.__class__)
 
     # store the resource to avoid another geoserver call in the post_save
     if gs_resource:
@@ -390,17 +374,12 @@ def geoserver_post_save_local(instance, *args, **kwargs):
     # some thumbnail generators will update thumbnail_url.  If so, don't
     # immediately re-generate the thumbnail here.  use layer#save(update_fields=['thumbnail_url'])
     if gs_resource:
-        logger.info("... Creating Default Resource Links for Layer [%s]" % (instance.alternate))
-        try:
-            set_resource_default_links(instance, instance, prune=True)
-        except BaseException:
-            from django.db import connection
-            connection._rollback()
-            logger.warn("Failure Creating Default Resource Links for Layer [%s]" % (instance.alternate))
+        logger.debug("... Creating Default Resource Links for Layer [%s]" % (instance.alternate))
+        set_resource_default_links(instance, instance, prune=True)
 
         if 'update_fields' in kwargs and kwargs['update_fields'] is not None and \
                 'thumbnail_url' in kwargs['update_fields']:
-            logger.info("... Creating Thumbnail for Layer [%s]" % (instance.alternate))
+            logger.debug("... Creating Thumbnail for Layer [%s]" % (instance.alternate))
             create_gs_thumbnail(instance, overwrite=True)
 
     # Updating HAYSTACK Indexes if needed
@@ -433,5 +412,5 @@ def geoserver_pre_save_maplayer(instance, sender, **kwargs):
 def geoserver_post_save_map(instance, sender, created, **kwargs):
     instance.set_missing_info()
     if not created:
-        logger.info("... Creating Thumbnail for Map [%s]" % (instance.title))
+        logger.debug("... Creating Thumbnail for Map [%s]" % (instance.title))
         create_gs_thumbnail(instance, overwrite=False, check_bbox=True)

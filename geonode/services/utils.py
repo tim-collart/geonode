@@ -99,18 +99,18 @@ def get_esri_extent(esriobj):
         if 'fullExtent' in esriobj._json_struct:
             extent = esriobj._json_struct['fullExtent']
     except Exception as err:
-        logger.error(err, exc_info=True)
+        logger.debug(err, exc_info=True)
 
     try:
         if 'extent' in esriobj._json_struct:
             extent = esriobj._json_struct['extent']
     except Exception as err:
-        logger.error(err, exc_info=True)
+        logger.debug(err, exc_info=True)
 
     try:
         srs = extent['spatialReference']['wkid']
     except Exception as err:
-        logger.error(err, exc_info=True)
+        logger.debug(err, exc_info=True)
 
     return [extent, srs]
 
@@ -121,7 +121,7 @@ def decimal_encode(bbox):
     for o in bbox:
         try:
             o = float(o)
-        except BaseException:
+        except Exception:
             o = None if 'EPSG' not in o else o
         if o and isinstance(o, float):
             _bbox.append("{0:.15f}".format(round(o, 2)))
